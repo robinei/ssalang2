@@ -26,17 +26,18 @@
 #include <stdint.h>
 
 struct NAMESPACED(entry) {
-    uint32_t hash;
     KEY_TYPE key;
 #ifdef VALUE_TYPE
     VALUE_TYPE value;
 #endif
+    uint32_t hash;
 };
 
 struct NAME {
     uint32_t used, size;
     struct NAMESPACED(entry) *entries;
 };
+
 typedef struct NAME NAME;
 
 LINKAGE void NAMESPACED(clear)(struct NAME *table);
