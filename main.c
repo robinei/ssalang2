@@ -5,7 +5,7 @@
 #include "vector.h"
 #include "defs.h"
 
-typedef i32 InstrId; // signed, so that pure instructions can have negative id (that way we don't commit to any sequencing of them early)
+typedef i16 InstrId; // signed, so that pure instructions can have negative id (that way we don't commit to any sequencing of them early)
 typedef u32 BlockId;
 typedef u32 TypeId;
 typedef u32 VarId;
@@ -28,16 +28,14 @@ typedef u32 VarId;
 #include "hashtable.h"
 
 
-#define LIST_ENTRY_SIZE 3
-
 typedef struct ListEntry {
-  i16 values[LIST_ENTRY_SIZE];
+  i16 values[3];
   i16 next;
 } ListEntry;
 
-static void list_push(i16 value, ListEntry *e, ListEntry **entries) {
+static void list_push(i16 value, ListEntry *e, Vector(ListEntry) *entries) {
 start:
-  for (int i = 0; i < LIST_ENTRY_SIZE; ++i) {
+  for (int i = 0; i < 3; ++i) {
     if (!e->values[i]) {
       e->values[i] = value;
       return;
@@ -55,7 +53,7 @@ start:
 
 static void list_clear(ListEntry *e, ListEntry **entries) {
 start:
-  for (int i = 0; i < LIST_ENTRY_SIZE; ++i) {
+  for (int i = 0; i < 3; ++i) {
     e->values[i] = 0;
   }
   if (e->next) {
@@ -63,17 +61,6 @@ start:
     goto start;
   }
 }
-
-
-typedef struct AddedInstr {
-  i16 where, id;
-} AddedInstr;
-
-#define NAME sort_added_instrs
-#define TYPE AddedInstr
-#define COMPARE(a, b) a.where - b.where
-#include "mergesort.h"
-
 
 
 
@@ -141,21 +128,25 @@ typedef union Instr {
 
 typedef struct Block {
   u32 is_sealed : 1;
+  u32 is_visited : 1;
   u32 start : 15;
-  u32 end : 16;
+  u32 end : 15;
   u16 succs[2];
   ListEntry preds;
   ListEntry incomplete_phis;
+  ListEntry prefix;
+  ListEntry suffix;
 } Block;
 
 typedef struct Func {
   Instr *code;
   i32 numneg, maxneg, numpos, maxpos;
 
-  Vector(AddedInstr) added;
+  BlockId curr_block;
   Vector(Block) blocks;
   Vector(Variable) vars;
   Vector(ListEntry) list_entries;
+  Vector(InstrId) upsilons;
   u32_to_u32 bindings;
   u64_to_u32 ircache;
 } Func;
@@ -168,171 +159,6 @@ static Type types[TY_MAX] = {
   { TK_INT, sizeof(i32) },
 };
 
-static InstrId push_instr_pinned(Func *f, Instr instr) {
-  assert(instr.tag < IR_CONST);
-  if (f->numpos == f->maxpos) {
-    u32 maxpos = f->maxpos * 2;
-    Instr *code = (Instr *)malloc(sizeof(Instr) * (f->maxneg + maxpos)) + f->maxneg;
-    memcpy(code - f->numneg, f->code - f->numneg, sizeof(Instr) * (f->numneg + f->numpos));
-    free(f->code - f->maxneg);
-    f->code = code;
-    f->maxpos = maxpos;
-  }
-  InstrId id = f->numpos++;
-  assert(id < INT16_MAX);
-  f->code[id] = instr;
-  return id;
-}
-
-static InstrId push_instr_unpinned(Func *f, Instr instr) {
-  if (instr.tag >= IR_CONST) {
-    u32 cached;
-    if (u64_to_u32_get(&f->ircache, instr.u64_repr, &cached)) {
-      return cached;
-    }
-  }
-
-  if (f->numneg == f->maxneg) {
-    u32 maxneg = f->maxneg * 2;
-    Instr *code = (Instr *)malloc(sizeof(Instr) * (maxneg + f->maxpos)) + maxneg;
-    memcpy(code - f->numneg, f->code - f->numneg, sizeof(Instr) * (f->numneg + f->numpos));
-    free(f->code - f->maxneg);
-    f->code = code;
-    f->maxneg = maxneg;
-  }
-
-  InstrId id = -(++f->numneg);
-  assert(id > INT16_MIN);
-  if (instr.tag >= IR_CONST) {
-    u64_to_u32_put(&f->ircache, instr.u64_repr, id);
-  }
-  f->code[id] = instr;
-  return id;
-}
-
-static void init_code_array(Func *f) {
-  f->numneg = f->numpos = 0;
-  f->maxneg = f->maxpos = 16;
-  f->code = (Instr *)malloc(sizeof(Instr) * (f->maxneg + f->maxpos)) + f->maxneg;
-  push_instr_pinned(f, (Instr) { .tag = IR_NOP, .type = TY_VOID, }); // let instr at index 0 be NOP
-}
-
-InstrId push_instr(Func *f, Instr instr) {
-  if (instr.tag >= IR_CONST) {
-    // allocate pure instructions at negative indices (so they don't have explicit ordering initially)
-    return push_instr_unpinned(f, instr);
-  } else {
-    // impure instructions are laid out normally with positive indices and significant sequencing
-    return push_instr_pinned(f, instr);
-  }
-}
-
-InstrId insert_block_instr(Func *f, BlockId block, Instr instr, InstrId where) {
-  if (where == f->numpos) {
-    ++f->blocks[block].end;
-    return push_instr_pinned(f, instr);
-  }
-  InstrId id = push_instr_unpinned(f, instr);
-  vector_push(f->added, ((AddedInstr) { .where = where, .id = id }));
-  return id;
-}
-
-InstrId append_block_instr(Func *f, BlockId block, Instr instr) {
-  Block *b = f->blocks + block;
-  InstrId where = b->end;
-  if (b->succs[0]) {
-    --where; // insert before terminating JUMP
-    if (b->succs[1]) {
-      --where; // insert before terminating JFALSE
-    }
-  }
-  return insert_block_instr(f, block, instr, where);
-}
-
-InstrId prepend_block_instr(Func *f, BlockId block, Instr instr) {
-  InstrId where = f->blocks[block].start + 1; // insert after LABEL
-  return insert_block_instr(f, block, instr, where);
-}
-
-InstrId emit_bool(Func *f, bool val) {
-  return push_instr_unpinned(f, (Instr) { .tag = IR_CONST, .type = TY_BOOL, .bool_const = val });
-}
-
-InstrId emit_i32(Func *f, i32 val) {
-  return push_instr_unpinned(f, (Instr) { .tag = IR_CONST, .type = TY_I32, .i32_const = val });
-}
-
-InstrId emit_add(Func *f, InstrId lhs, InstrId rhs) {
-  assert(f->code[lhs].type == f->code[rhs].type);
-  return push_instr_unpinned(f, (Instr) { .tag = IR_ADD, .type = f->code[lhs].type, .lhs = lhs, .rhs = rhs });
-}
-
-void emit_label(Func *f, BlockId block) {
-  f->blocks[block].start = push_instr_pinned(f, (Instr) { .tag = IR_LABEL, .rhs = block });
-  f->blocks[block].end = f->blocks[block].start + 1;
-}
-
-void emit_ret(Func *f, BlockId block, InstrId retval) {
-  Block *b = f->blocks + block;
-  append_block_instr(f, block, (Instr) { .tag = IR_RET, .lhs = retval });
-}
-
-void emit_jump(Func *f, BlockId block, BlockId target) {
-  Block *b = f->blocks + block;
-  Block *tb = f->blocks + target;
-  assert(!b->succs[0]);
-  assert(!tb->is_sealed);
-  append_block_instr(f, block, (Instr) { .tag = IR_JUMP, .rhs = target });
-  b->succs[0] = target;
-  list_push(block, &tb->preds, &f->list_entries);
-}
-
-void emit_jfalse(Func *f, BlockId block, BlockId false_target, InstrId cond) {
-  Block *b = f->blocks + block;
-  Block *tb = f->blocks + false_target;
-  assert(!b->succs[0]);
-  assert(!b->succs[1]);
-  assert(!tb->is_sealed);
-  append_block_instr(f, block, (Instr) { .tag = IR_JFALSE, .lhs = cond, .rhs = false_target });
-  b->succs[1] = false_target;
-  list_push(block, &f->blocks[false_target].preds, &f->list_entries);
-}
-
-void emit_upsilon(Func *f, BlockId block, InstrId val, InstrId phi) {
-  append_block_instr(f, block, (Instr) { .tag = IR_UPSILON, .lhs = val, .rhs = phi });
-}
-
-InstrId emit_phi(Func *f, BlockId block, VarId var) {
-  Block *b = f->blocks + block;
-  if (b->is_sealed && b->preds.values[0] && b->preds.values[1] && !b->preds.values[2]) {
-    Block *branch0 = f->blocks + b->preds.values[0];
-    Block *branch1 = f->blocks + b->preds.values[1];
-    if (branch0->is_sealed && branch1->is_sealed && branch0->preds.values[0] && branch0->preds.values[0] == branch1->preds.values[0] && !branch0->preds.values[1] && !branch1->preds.values[1]) {
-      Block *entry = f->blocks + branch0->preds.values[0];
-      Block *then, *els;
-      if (entry->succs[0] == b->preds.values[0]) {
-        assert(entry->succs[1] == b->preds.values[1]);
-        then = branch0;
-        els = branch1;
-      } else {
-        assert(entry->succs[0] == b->preds.values[1]);
-        assert(entry->succs[1] == b->preds.values[0]);
-        then = branch1;
-        els = branch0;
-      }
-      InstrId then_val = 0;
-      InstrId else_val = 0;
-      if (f->code[then->start + 1].tag == IR_UPSILON && f->code[then->start + 2].tag == IR_JUMP)
-      {
-        then_val = f->code[then->start + 1].lhs;
-      }
-    }
-  }
-  return prepend_block_instr(f, block, (Instr) { .tag = IR_PHI, .rhs = var });
-}
-
-
-
 
 
 BlockId create_block(Func *f) {
@@ -340,6 +166,22 @@ BlockId create_block(Func *f) {
   assert(id < INT16_MAX);
   vector_push(f->blocks, (Block) { });
   return id;
+}
+
+static Block *get_block(Func *f, BlockId block) {
+  assert(block);
+  while (vector_size(f->blocks) <= block) {
+    create_block(f);
+  }
+  return f->blocks + block;
+}
+
+static void init_code_array(Func *f) {
+  f->maxneg = f->maxpos = 16;
+  f->code = (Instr *)malloc(sizeof(Instr) * (f->maxneg + f->maxpos)) + f->maxneg;
+  f->code[0] = (Instr) { .tag = IR_NOP, .type = TY_VOID, }; // let instr at index 0 be NOP
+  f->numpos = 1;
+  f->numneg = 0;
 }
 
 Func *create_func() {
@@ -356,42 +198,272 @@ VarId create_variable(Func *f, const char *name) {
   return id;
 }
 
+static InstrId emit_instr(Func *f, Instr instr, bool pinned) {
+  InstrId id;
+  if (pinned) {
+    assert(f->curr_block || instr.tag == IR_LABEL);
+    if (f->numpos == f->maxpos) {
+      u32 maxpos = f->maxpos * 2;
+      Instr *code = (Instr *)malloc(sizeof(Instr) * (f->maxneg + maxpos)) + f->maxneg;
+      memcpy(code - f->numneg, f->code - f->numneg, sizeof(Instr) * (f->numneg + f->numpos));
+      free(f->code - f->maxneg);
+      f->code = code;
+      f->maxpos = maxpos;
+    }
+    id = f->numpos;
+  } else {
+    if (instr.tag >= IR_CONST) {
+      u32 cached;
+      if (u64_to_u32_get(&f->ircache, instr.u64_repr, &cached)) {
+        return cached;
+      }
+    }
+    if (f->numneg == f->maxneg) {
+      u32 maxneg = f->maxneg * 2;
+      Instr *code = (Instr *)malloc(sizeof(Instr) * (maxneg + f->maxpos)) + maxneg;
+      memcpy(code - f->numneg, f->code - f->numneg, sizeof(Instr) * (f->numneg + f->numpos));
+      free(f->code - f->maxneg);
+      f->code = code;
+      f->maxneg = maxneg;
+    }
+    id = -(f->numneg + 1);
+  }
+  assert(id > INT16_MIN && id < INT16_MAX);
+
+  Block *b;
+  if (instr.tag == IR_LABEL) {
+    assert(id == f->numpos);
+    b = get_block(f, instr.rhs);
+    b->start = b->end = id;
+    f->curr_block = instr.rhs;
+    goto do_write;
+  }
+
+  b = get_block(f, f->curr_block);
+
+  switch (instr.tag) {
+    case IR_NOP:
+      return 0;
+
+    case IR_UPSILON:
+      vector_push(f->upsilons, id);
+      break;
+
+    case IR_JUMP: {
+      if (b->succs[0] ) {
+        // already has IR_JUMP instr
+        return 0;
+      }
+      Block *tb = get_block(f, instr.rhs);
+      assert(!b->succs[0]);
+      assert(!tb->is_sealed);
+      b->succs[0] = instr.rhs;
+      list_push(f->curr_block, &tb->preds, &f->list_entries);
+      break;
+    }
+
+    case IR_JFALSE: {
+      Block *tb = get_block(f, instr.rhs);
+      Instr cond = f->code[instr.lhs];
+      assert(cond.type == TY_BOOL);
+      assert(!b->succs[0]);
+      assert(!b->succs[1]);
+      assert(!tb->is_sealed);
+      if (cond.tag == IR_CONST && false) {
+        if (cond.bool_const) {
+          // don't emit, because branch will never be taken
+          return 0;
+        }
+        // emit as IR_JUMP, because branch will always be taken
+        instr.tag = IR_JUMP;
+        b->succs[0] = instr.rhs;
+        list_push(f->curr_block, &tb->preds, &f->list_entries);
+      } else {
+        b->succs[1] = instr.rhs;
+        list_push(f->curr_block, &tb->preds, &f->list_entries);
+      }
+      break;
+    }
+
+    case IR_PHI: {
+      if (b->is_sealed && b->preds.values[0] && b->preds.values[1] && !b->preds.values[2]) {
+        Block *branch0 = get_block(f, b->preds.values[0]);
+        Block *branch1 = get_block(f, b->preds.values[1]);
+        if (branch0->is_sealed && branch1->is_sealed && branch0->preds.values[0] && branch0->preds.values[0] == branch1->preds.values[0] && !branch0->preds.values[1] && !branch1->preds.values[1]) {
+          Block *entry = get_block(f, branch0->preds.values[0]);
+          Block *then, *els;
+          if (entry->succs[0] == b->preds.values[0]) {
+            assert(entry->succs[1] == b->preds.values[1]);
+            then = branch0;
+            els = branch1;
+          } else {
+            assert(entry->succs[0] == b->preds.values[1]);
+            assert(entry->succs[1] == b->preds.values[0]);
+            then = branch1;
+            els = branch0;
+          }
+          InstrId then_val = 0;
+          InstrId else_val = 0;
+          if (f->code[then->start + 1].tag == IR_UPSILON && f->code[then->start + 2].tag == IR_JUMP)
+          {
+            then_val = f->code[then->start + 1].lhs;
+          }
+        }
+      }
+      break;
+    }
+  }
+
+do_write:
+  if (pinned) {
+    assert(id > 0);
+    ++b->end;
+    ++f->numpos;
+  } else {
+    assert(id < 0);
+    ++f->numneg;
+    if (instr.tag >= IR_CONST) {
+      u64_to_u32_put(&f->ircache, instr.u64_repr, id);
+    }
+  }
+  f->code[id] = instr;
+  return id;
+}
+
+static InstrId emit_instr_pinned(Func *f, Instr instr) {
+  return emit_instr(f, instr, true);
+}
+
+static InstrId emit_instr_unpinned(Func *f, Instr instr) {
+  return emit_instr(f, instr, false);
+}
+
+static InstrId append_block_instr(Func *f, BlockId block, Instr instr) {
+  if (block == f->curr_block) {
+    return emit_instr_pinned(f, instr);
+  }
+  Block *b = get_block(f, block);
+  BlockId temp = f->curr_block;
+  f->curr_block = block;
+  InstrId id = emit_instr_unpinned(f, instr);
+  f->curr_block = temp;
+  list_push(id, &b->suffix, &f->list_entries);
+  return id;
+}
+
+static InstrId prepend_block_instr(Func *f, BlockId block, Instr instr) {
+  Block *b = get_block(f, block);
+  if (block == f->curr_block && b->end == b->start + 1) {
+    return emit_instr_pinned(f, instr);
+  }
+  BlockId temp = f->curr_block;
+  f->curr_block = block;
+  InstrId id = emit_instr_unpinned(f, instr);
+  f->curr_block = temp;
+  list_push(id, &b->prefix, &f->list_entries);
+  return id;
+}
+
+
+InstrId emit_bool(Func *f, bool val) {
+  return emit_instr_unpinned(f, (Instr) { .tag = IR_CONST, .type = TY_BOOL, .bool_const = val });
+}
+
+InstrId emit_i32(Func *f, i32 val) {
+  return emit_instr_unpinned(f, (Instr) { .tag = IR_CONST, .type = TY_I32, .i32_const = val });
+}
+
+InstrId emit_add(Func *f, InstrId lhs, InstrId rhs) {
+  return emit_instr_unpinned(f, (Instr) { .tag = IR_ADD, .type = f->code[lhs].type, .lhs = lhs, .rhs = rhs });
+}
+
+void emit_label(Func *f, BlockId block) {
+  emit_instr_pinned(f, (Instr) { .tag = IR_LABEL, .rhs = block });
+}
+
+void emit_jump(Func *f, BlockId block, BlockId target) {
+  append_block_instr(f, block, (Instr) { .tag = IR_JUMP, .rhs = target });
+}
+
+void emit_jfalse(Func *f, BlockId block, BlockId false_target, InstrId cond) {
+  append_block_instr(f, block, (Instr) { .tag = IR_JFALSE, .lhs = cond, .rhs = false_target });
+}
+
+void emit_ret(Func *f, BlockId block, InstrId retval) {
+  append_block_instr(f, block, (Instr) { .tag = IR_RET, .lhs = retval });
+}
+
+void emit_upsilon(Func *f, BlockId block, InstrId val, InstrId phi) {
+  append_block_instr(f, block, (Instr) { .tag = IR_UPSILON, .lhs = val, .rhs = phi });
+}
+
+InstrId emit_phi(Func *f, BlockId block) {
+  return prepend_block_instr(f, block, (Instr) { .tag = IR_PHI });
+}
+
+
+
+
+
 typedef union {
   struct { i16 block, var; };
-  i32 i32_value;
+  i32 u32_value;
 } BindingKey;
+
+static InstrId create_pred_upsilons(Func *f, BlockId block, InstrId phi);
 
 void write_variable(Func *f, BlockId block, VarId var, InstrId val) {
   BindingKey key = {{ block, var }};
-  u32_to_u32_put(&f->bindings, key.i32_value, val);
+  u32_to_u32_put(&f->bindings, key.u32_value, val);
 }
 
-InstrId read_variable(Func *f, BlockId block, VarId var);
+InstrId read_variable(Func *f, BlockId block, VarId var) {
+  BindingKey key = {{ block, var }};
+  u32 found;
+  if (u32_to_u32_get(&f->bindings, key.u32_value, &found)) {
+    return found;
+  }
+
+  InstrId val;
+  Block *b = get_block(f, block);
+  if (!b->is_sealed) {
+    val = emit_phi(f, block);
+    list_push(val, &b->incomplete_phis, &f->list_entries);
+  } else if (b->preds.values[0] && !b->preds.values[1]) {
+    // exactly one predecessor
+    val = read_variable(f, b->preds.values[0], var);
+  } else {
+    val = emit_phi(f, block);
+    write_variable(f, block, var, val);
+    val = create_pred_upsilons(f, block, val);
+  }
+
+  write_variable(f, block, var, val);
+  return val;
+}
 
 static InstrId try_remove_trivial_phi(Func *f, InstrId phi) {
   InstrId phi_users[128];
   int phi_users_count = 0;
 
-  InstrId same = 0;
-  for (InstrId id = -f->numneg; id < f->numpos; ++id) {
+  InstrId same = 0, id;
+  vector_foreach(f->upsilons, id) {
     Instr instr = f->code[id];
-    if (instr.tag == IR_UPSILON) {
-      if (instr.rhs == phi) {
-        // this is an upsilon which writes the shadow variable for this phi (so it is in effect an operand)
-        InstrId op = instr.lhs;
-        if (op == same || op == phi) {
-          continue;
-        }
-        if (same) {
-          return phi;
-        }
-        same = op;
-      } else if (instr.lhs == phi) {
-        // this upsilon defines an operand to a different phi, but the value written is this phi.
-        // record this phi user, so we can try to recursively remove trivial phis.
-        assert(phi_users_count < 128);
-        phi_users[phi_users_count++] == instr.rhs;
+    if (instr.rhs == phi) {
+      // this is an upsilon which writes the shadow variable for this phi (so it is in effect an operand)
+      InstrId op = instr.lhs;
+      if (op == same || op == phi) {
+        continue;
       }
+      if (same) {
+        return phi;
+      }
+      same = op;
+    } else if (instr.lhs == phi) {
+      // this upsilon defines an operand to a different phi, but the value written is this phi.
+      // record this phi user, so we can try to recursively remove trivial phis.
+      assert(phi_users_count < 128);
+      phi_users[phi_users_count++] = instr.rhs;
     }
   }
 
@@ -403,11 +475,11 @@ static InstrId try_remove_trivial_phi(Func *f, InstrId phi) {
   }
 }
 
-static InstrId create_upsilons_in_predecessors(Func *f, BlockId block, InstrId phi) {
+static InstrId create_pred_upsilons(Func *f, BlockId block, InstrId phi) {
   VarId var = f->code[phi].rhs;
-  Block *b = f->blocks + block;
+  Block *b = get_block(f, block);
   for (ListEntry *e = &b->preds; ; e = f->list_entries + e->next) {
-    for (int i = 0; i < LIST_ENTRY_SIZE; ++i) {
+    for (int i = 0; i < 3; ++i) {
       BlockId pred = e->values[i];
       if (!pred) goto end;
       InstrId val = read_variable(f, pred, var);
@@ -421,39 +493,14 @@ end:
   //return try_remove_trivial_phi(f, phi);
 }
 
-InstrId read_variable(Func *f, BlockId block, VarId var) {
-  BindingKey key = {{ block, var }};
-  InstrId val;
-  if (u32_to_u32_get(&f->bindings, key.i32_value, &val)) {
-    return val;
-  }
-
-  Block *b = f->blocks + block;
-  if (!b->is_sealed) {
-    val = emit_phi(f, block, var);
-    list_push(val, &b->incomplete_phis, &f->list_entries);
-  } else if (b->preds.values[0] && !b->preds.values[1]) {
-    // exactly one predecessor
-    val = read_variable(f, b->preds.values[0], var);
-  } else {
-    val = emit_phi(f, block, var);
-    write_variable(f, block, var, val);
-    val = create_upsilons_in_predecessors(f, block, val);
-  }
-
-  write_variable(f, block, var, val);
-  return val;
-}
-
-
 void seal_block(Func *f, BlockId block) {
-  Block *b = f->blocks + block;
+  Block *b = get_block(f, block);
   assert(!b->is_sealed);
   for (ListEntry *e = &b->incomplete_phis; ; e = f->list_entries + e->next) {
-    for (int i = 0; i < LIST_ENTRY_SIZE; ++i) {
+    for (int i = 0; i < 3; ++i) {
       BlockId phi = e->values[i];
       if (!phi) goto end;
-      create_upsilons_in_predecessors(f, block, phi);
+      create_pred_upsilons(f, block, phi);
     }
     if (!e->next) break;
   }
@@ -465,29 +512,29 @@ end:
 
 
 
-static InstrId reemit_instr(Func *f, Instr *code, i16 *map, InstrId id);
+static InstrId reemit_dependency(Func *f, Instr *code, i16 *map, InstrId id);
 
 static Instr reemit_dependencies(Func *f, Instr *code, i16 *map, Instr instr) {
   switch (instr.tag) {
     case IR_JFALSE:
     case IR_RET:
-      instr.lhs = reemit_instr(f, code, map, instr.lhs);
+      instr.lhs = reemit_dependency(f, code, map, instr.lhs);
       break;
     case IR_UPSILON:
-      instr.lhs = reemit_instr(f, code, map, instr.lhs);
+      instr.lhs = reemit_dependency(f, code, map, instr.lhs);
       instr.rhs = map[instr.rhs];
       assert(instr.rhs);
       break;
     case IR_ADD:
     case IR_EQ:
-      instr.lhs = reemit_instr(f, code, map, instr.lhs);
-      instr.rhs = reemit_instr(f, code, map, instr.rhs);
+      instr.lhs = reemit_dependency(f, code, map, instr.lhs);
+      instr.rhs = reemit_dependency(f, code, map, instr.rhs);
       break;
   }
   return instr;
 }
 
-static InstrId reemit_instr(Func *f, Instr *code, i16 *map, InstrId id) {
+static InstrId reemit_dependency(Func *f, Instr *code, i16 *map, InstrId id) {
   if (map[id]) {
     return map[id];
   }
@@ -495,57 +542,88 @@ static InstrId reemit_instr(Func *f, Instr *code, i16 *map, InstrId id) {
   //while (code[src].tag == IR_IDENTITY) {
   //  src = code[src].lhs;
   //}
-  return map[id] = push_instr(f, reemit_dependencies(f, code, map, code[src]));
+  assert(code[id].tag >= IR_CONST);
+  return map[id] = emit_instr_unpinned(f, reemit_dependencies(f, code, map, code[src]));
+}
+
+static void reemit_block(Func *f, BlockId block, Vector(Block) blocks, Instr *code, i16 *map) {
+  Block *b = blocks + block;
+  if (b->is_visited) {
+    return;
+  }
+  b->is_visited = true;
+
+  for (ListEntry *e = &b->prefix; ; e = f->list_entries + e->next) {
+    for (int i = 0; i < 3; ++i) {
+      InstrId id = e->values[i];
+      if (!id) goto prefix_done;
+      map[id] = emit_instr_pinned(f, code[id]);
+    }
+    if (!e->next) break;
+  }
+prefix_done:
+
+  for (InstrId id = b->start; id < b->end; ++id) {
+    Instr instr = code[id];
+    map[id] = emit_instr_pinned(f, instr);
+  }
+
+  for (ListEntry *e = &b->suffix; ; e = f->list_entries + e->next) {
+    for (int i = 0; i < 3; ++i) {
+      InstrId id = e->values[i];
+      if (!id) goto suffix_done;
+      map[id] = emit_instr_pinned(f, code[id]);
+    }
+    if (!e->next) break;
+  }
+suffix_done:
+
+  for (int i = 0; i < 2; ++i) {
+    if (b->succs[i]) {
+      reemit_block(f, b->succs[i], blocks, code, map);
+    }
+  }
 }
 
 static void reemit_all(Func *f) {
   i16 map_buffer[65536] = { 0, };
   i16 *map = map_buffer + 32768; // map from old to new InstrId
-  
-  AddedInstr *added = f->added;
-  AddedInstr *toadd = added;
-  AddedInstr *added_end = vector_end(added);
-  f->added = NULL;
-  AddedInstr *temp_added = malloc(sizeof(AddedInstr) * vector_size(added));
-  sort_added_instrs(added, 0, vector_size(added) - 1, temp_added);
-  free(temp_added);
 
   Instr *code = f->code;
   assert(code);
   Instr *code_base_ptr = code - f->maxneg;
   int end_id = f->numpos;
   init_code_array(f);
+
+  Vector(ListEntry) list_entries = vector_clone(f->list_entries);
+  f->list_entries = NULL;
+
+  Vector(Block) blocks = vector_clone(f->blocks);
+  f->blocks = NULL;
+  f->curr_block = 0;
+
+  vector_free(f->vars);
+  f->vars = NULL;
+
   u64_to_u32_clear(&f->ircache);
+  u32_to_u32_clear(&f->bindings);
 
-  for (InstrId id = 1; id <= end_id; ++id) {
-    while (toadd && toadd < added_end && toadd->where == id) {
-      map[toadd->id] = push_instr_pinned(f, code[toadd->id]);
-      ++toadd;
-      continue;
-    }
-
-    if (id == end_id) {
-      break;
-    }
-
-    Instr instr = code[id];
-
-    if (instr.tag == IR_NOP) {
-      continue;
-    }
-
-    if (instr.tag == IR_UPSILON && code[instr.rhs].tag != IR_PHI) {
-      continue;
-    }
-
-    map[id] = push_instr_pinned(f, instr);
-  }
+  reemit_block(f, 1, blocks, code, map);
 
   for (InstrId id = 1; id < f->numpos; ++id) {
     f->code[id] = reemit_dependencies(f, code, map, f->code[id]);
   }
 
-  vector_free(added);
+  InstrId id;
+  vector_foreach(f->upsilons, id) {
+    InstrId phi = map[f->code[id].rhs];
+    assert(f->code[id].tag == IR_UPSILON);
+    assert(phi);
+    f->code[id].rhs = phi;
+  }
+
+  vector_free(list_entries);
+  vector_free(blocks);
   free(code_base_ptr);
 }
 
@@ -564,7 +642,7 @@ static void print_ir(Func *f) {
       case IR_JFALSE: printf("  JFALSE %d :%d\n", instr.lhs, instr.rhs); break;
       case IR_RET: printf("  RET %d\n", instr.lhs); break;
       case IR_UPSILON: printf("  UPSILON %d %d [%s]\n", instr.lhs, instr.rhs, f->vars[f->code[instr.rhs].rhs].name); break;
-      case IR_PHI: printf("  %d = PHI [%s]\n", id, f->vars[instr.rhs].name); break; 
+      case IR_PHI: printf("  %d = PHI\n", id); break; 
       case IR_CONST:
         switch (instr.type) {
           case TY_VOID: printf("  %d = CONST void\n", id); break;
@@ -591,29 +669,28 @@ int main(int argc, char *argv[]) {
   BlockId else_block = create_block(f);
   BlockId exit_block = create_block(f);
 
-  emit_label(f, entry_block);
   seal_block(f, entry_block);
+  emit_label(f, entry_block);
   write_variable(f, entry_block, x, emit_i32(f, 1));
   emit_jfalse(f, entry_block, else_block, emit_bool(f, true));
   emit_jump(f, entry_block, then_block);
   
-  emit_label(f, then_block);
   seal_block(f, then_block);
+  emit_label(f, then_block);
   write_variable(f, then_block, x, emit_add(f, read_variable(f, then_block, x), emit_i32(f, 10)));
   emit_jump(f, then_block, exit_block);
   
-  emit_label(f, else_block);
   seal_block(f, else_block);
+  emit_label(f, else_block);
   write_variable(f, else_block, x, emit_add(f, read_variable(f, else_block, x), emit_i32(f, 10)));
   emit_jump(f, else_block, exit_block);
 
-  emit_label(f, exit_block);
   seal_block(f, exit_block);
+  emit_label(f, exit_block);
   emit_ret(f, exit_block, read_variable(f, exit_block, x));
 
-  reemit_all(f);
+  //reemit_all(f);
   print_ir(f);
 
   return 0;
 }
-

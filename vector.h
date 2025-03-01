@@ -1,12 +1,15 @@
 #pragma once
 
 #include <stdlib.h>
+#include <string.h>
 
 #define VECTOR_INITIAL_CAPACITY 16
 
 #define Vector(T) T*
 
 #define vector_free(V) do { if (V) free((int *)(V) - 2); } while(0)
+
+#define vector_clone(V) _vector_clone((int *)V, sizeof(*(V)))
 
 #define _vector__size(V) (((int *)(V))[-1])
 #define _vector__capacity(V) (((int *)(V))[-2])
@@ -19,6 +22,7 @@
 #define vector_end(V) ((V) + vector_size(V))
 
 #define vector_clear(V) do { if (V) __vector_size(V) = 0; } while (0)
+#define vector_zero(V) memset(V, 0, sizeof(*(V)) * vector_size(V))
 
 #define vector_pop(V) ((V)[--_vector__size(V)])
 #define vector_push(V, X) \
@@ -54,3 +58,13 @@
     for (int __index  = vector_size(V) - 1; \
          __index >= 0 && ((X) = (V)[__index], 1); \
          --__index)
+
+static void *_vector_clone(int *src, size_t element_size) {
+    if (!src) {
+        return src;
+    }
+    size_t bufsize = element_size*_vector__capacity(src) + sizeof(int)*2;
+    int *dst = malloc(bufsize);
+    memcpy(dst, src, bufsize);
+    return dst + 2;
+}
