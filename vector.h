@@ -21,7 +21,7 @@
 #define vector_last(V) ((V)[_vector__size(V) - 1])
 #define vector_end(V) ((V) + vector_size(V))
 
-#define vector_clear(V) do { if (V) __vector_size(V) = 0; } while (0)
+#define vector_clear(V) do { if (V) _vector__size(V) = 0; } while (0)
 #define vector_zero(V) memset(V, 0, sizeof(*(V)) * vector_size(V))
 
 #define vector_pop(V) ((V)[--_vector__size(V)])
@@ -61,10 +61,10 @@
 
 static void *_vector_clone(int *src, size_t element_size) {
     if (!src) {
-        return src;
+        return NULL;
     }
     size_t bufsize = element_size*_vector__capacity(src) + sizeof(int)*2;
     int *dst = malloc(bufsize);
-    memcpy(dst, src, bufsize);
+    memcpy(dst, src - 2, bufsize);
     return dst + 2;
 }

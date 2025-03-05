@@ -10,9 +10,9 @@ typedef u32 BlockId;
 typedef u32 TypeId;
 typedef u32 VarId;
 
-#define NAME u32_to_u32
+#define NAME u32_to_u64
 #define KEY_TYPE u32
-#define VALUE_TYPE u32
+#define VALUE_TYPE u64
 #define HASH_FUNC(x) hashutil_uint32_hash(x)
 #define EXPAND_INTERFACE
 #define EXPAND_IMPLEMENTATION
@@ -147,7 +147,7 @@ typedef struct Func {
   Vector(Variable) vars;
   Vector(ListEntry) list_entries;
   Vector(InstrId) upsilons;
-  u32_to_u32 bindings;
+  u32_to_u64 bindings;
   u64_to_u32 ircache;
 } Func;
 
@@ -158,6 +158,39 @@ static Type types[TY_MAX] = {
   { TK_BOOL, sizeof(bool) },
   { TK_INT, sizeof(i32) },
 };
+
+
+
+
+static void print_instr(Func *f, InstrId id, Instr instr) {
+  switch (instr.tag) {
+    case IR_NOP: printf("  NOP\n"); break;
+    case IR_IDENTITY: printf("  %d = ID %d\n", id, instr.lhs); break;
+    case IR_LABEL: printf(":%d\n", instr.rhs); break;
+    case IR_JUMP: printf("  JUMP :%d\n", instr.rhs); break;
+    case IR_JFALSE: printf("  JFALSE %d :%d\n", instr.lhs, instr.rhs); break;
+    case IR_RET: printf("  RET %d\n", instr.lhs); break;
+    case IR_UPSILON: printf("  UPSILON %d %d [%s]\n", instr.lhs, instr.rhs, f->vars[f->code[instr.rhs].rhs].name); break;
+    case IR_PHI: printf("  %d = PHI\n", id); break; 
+    case IR_CONST:
+      switch (instr.type) {
+        case TY_VOID: printf("  %d = CONST void\n", id); break;
+        case TY_BOOL: printf("  %d = CONST %s\n", id, instr.bool_const ? "true" : "false"); break;
+        case TY_I32: printf("  %d = CONST %d\n", id, instr.i32_const); break;
+        default: assert(0); break;
+      }
+      break;
+    case IR_ADD: printf("  %d = ADD %d %d\n", id, instr.lhs, instr.rhs); break;
+    case IR_EQ: printf("  %d = EQ %d %d\n", id, instr.lhs, instr.rhs); break;
+    default: assert(0); break;
+  }
+}
+
+static void print_ir(Func *f) {
+  for (InstrId id = -f->numneg; id < f->numpos; ++id) {
+    print_instr(f, id, f->code[id]);
+  }
+}
 
 
 
@@ -198,10 +231,9 @@ VarId create_variable(Func *f, const char *name) {
   return id;
 }
 
-static InstrId emit_instr(Func *f, Instr instr, bool pinned) {
+static InstrId reserve_instr_slot(Func *f, bool pinned) {
   InstrId id;
   if (pinned) {
-    assert(f->curr_block || instr.tag == IR_LABEL);
     if (f->numpos == f->maxpos) {
       u32 maxpos = f->maxpos * 2;
       Instr *code = (Instr *)malloc(sizeof(Instr) * (f->maxneg + maxpos)) + f->maxneg;
@@ -212,12 +244,6 @@ static InstrId emit_instr(Func *f, Instr instr, bool pinned) {
     }
     id = f->numpos;
   } else {
-    if (instr.tag >= IR_CONST) {
-      u32 cached;
-      if (u64_to_u32_get(&f->ircache, instr.u64_repr, &cached)) {
-        return cached;
-      }
-    }
     if (f->numneg == f->maxneg) {
       u32 maxneg = f->maxneg * 2;
       Instr *code = (Instr *)malloc(sizeof(Instr) * (maxneg + f->maxpos)) + maxneg;
@@ -229,6 +255,67 @@ static InstrId emit_instr(Func *f, Instr instr, bool pinned) {
     id = -(f->numneg + 1);
   }
   assert(id > INT16_MIN && id < INT16_MAX);
+  return id;
+}
+
+static InstrId intern_instr(Func *f, Instr instr) {
+  if (instr.tag == IR_IDENTITY) {
+    return instr.lhs;
+  }
+  assert(instr.tag == IR_CONST);
+  u32 cached;
+  if (u64_to_u32_get(&f->ircache, instr.u64_repr, &cached)) {
+    return cached;
+  }
+  InstrId id = reserve_instr_slot(f, false);
+  assert(id < 0);
+  f->code[id] = instr;
+  ++f->numneg;
+  u64_to_u32_put(&f->ircache, instr.u64_repr, id);
+  return id;
+}
+
+static Instr to_value_instr(Func *f, InstrId id) {
+  Instr instr = f->code[id];
+  switch (instr.tag) {
+    case IR_CONST:
+    case IR_IDENTITY: return instr;
+    default: return (Instr) { .tag = IR_IDENTITY, .type = instr.type, .lhs = id };
+  }
+}
+
+static InstrId emit_instr(Func *f, Instr instr, bool pinned);
+
+static Instr emit_binary_instr(Func *f, InstrTag tag, Instr lhs, Instr rhs) {
+  switch (tag) {
+    case IR_ADD:
+      assert(lhs.type == rhs.type);
+      if (lhs.tag == IR_CONST && rhs.tag == IR_CONST) {
+        switch (lhs.type) {
+          case TY_I32: return (Instr) { .tag = IR_CONST, .type = lhs.type, .i32_const = lhs.i32_const + rhs.i32_const };
+          default: assert(0 && "unexpected type");
+        }
+      }
+      return to_value_instr(f, emit_instr(f, (Instr) { .tag = tag, .type = lhs.type, .lhs = intern_instr(f, lhs), .rhs = intern_instr(f, rhs) }, false));
+    case IR_EQ:
+      assert(lhs.type == rhs.type);
+      if (lhs.tag == IR_CONST && rhs.tag == IR_CONST) {
+        switch (lhs.type) {
+          case TY_BOOL: return (Instr) { .tag = IR_CONST, .type = TY_BOOL, .bool_const = lhs.bool_const == rhs.bool_const };
+          case TY_I32: return (Instr) { .tag = IR_CONST, .type = TY_BOOL, .bool_const = lhs.i32_const == rhs.i32_const };
+          default: assert(0 && "unexpected type");
+        }
+      }
+      return to_value_instr(f, emit_instr(f, (Instr) { .tag = tag, .type = TY_BOOL, .lhs = intern_instr(f, lhs), .rhs = intern_instr(f, rhs) }, false));
+    default:
+      assert(0 && "unknown binary instruction");
+  }
+}
+
+static InstrId emit_instr(Func *f, Instr instr, bool pinned) {
+  //assert(!pinned || f->curr_block || instr.tag == IR_LABEL);
+
+  InstrId id = reserve_instr_slot(f, pinned);
 
   Block *b;
   if (instr.tag == IR_LABEL) {
@@ -281,34 +368,6 @@ static InstrId emit_instr(Func *f, Instr instr, bool pinned) {
       } else {
         b->succs[1] = instr.rhs;
         list_push(f->curr_block, &tb->preds, &f->list_entries);
-      }
-      break;
-    }
-
-    case IR_PHI: {
-      if (b->is_sealed && b->preds.values[0] && b->preds.values[1] && !b->preds.values[2]) {
-        Block *branch0 = get_block(f, b->preds.values[0]);
-        Block *branch1 = get_block(f, b->preds.values[1]);
-        if (branch0->is_sealed && branch1->is_sealed && branch0->preds.values[0] && branch0->preds.values[0] == branch1->preds.values[0] && !branch0->preds.values[1] && !branch1->preds.values[1]) {
-          Block *entry = get_block(f, branch0->preds.values[0]);
-          Block *then, *els;
-          if (entry->succs[0] == b->preds.values[0]) {
-            assert(entry->succs[1] == b->preds.values[1]);
-            then = branch0;
-            els = branch1;
-          } else {
-            assert(entry->succs[0] == b->preds.values[1]);
-            assert(entry->succs[1] == b->preds.values[0]);
-            then = branch1;
-            els = branch0;
-          }
-          InstrId then_val = 0;
-          InstrId else_val = 0;
-          if (f->code[then->start + 1].tag == IR_UPSILON && f->code[then->start + 2].tag == IR_JUMP)
-          {
-            then_val = f->code[then->start + 1].lhs;
-          }
-        }
       }
       break;
     }
@@ -365,16 +424,20 @@ static InstrId prepend_block_instr(Func *f, BlockId block, Instr instr) {
 }
 
 
-InstrId emit_bool(Func *f, bool val) {
-  return emit_instr_unpinned(f, (Instr) { .tag = IR_CONST, .type = TY_BOOL, .bool_const = val });
+Instr emit_bool(Func *f, bool val) {
+  return (Instr) { .tag = IR_CONST, .type = TY_BOOL, .bool_const = val };
 }
 
-InstrId emit_i32(Func *f, i32 val) {
-  return emit_instr_unpinned(f, (Instr) { .tag = IR_CONST, .type = TY_I32, .i32_const = val });
+Instr emit_i32(Func *f, i32 val) {
+  return (Instr) { .tag = IR_CONST, .type = TY_I32, .i32_const = val };
 }
 
-InstrId emit_add(Func *f, InstrId lhs, InstrId rhs) {
-  return emit_instr_unpinned(f, (Instr) { .tag = IR_ADD, .type = f->code[lhs].type, .lhs = lhs, .rhs = rhs });
+Instr emit_add(Func *f, Instr lhs, Instr rhs) {
+  return emit_binary_instr(f, IR_ADD, lhs, rhs);
+}
+
+Instr emit_eq(Func *f, Instr lhs, Instr rhs) {
+  return emit_binary_instr(f, IR_EQ, lhs, rhs);
 }
 
 void emit_label(Func *f, BlockId block) {
@@ -385,20 +448,24 @@ void emit_jump(Func *f, BlockId block, BlockId target) {
   append_block_instr(f, block, (Instr) { .tag = IR_JUMP, .rhs = target });
 }
 
-void emit_jfalse(Func *f, BlockId block, BlockId false_target, InstrId cond) {
-  append_block_instr(f, block, (Instr) { .tag = IR_JFALSE, .lhs = cond, .rhs = false_target });
+void emit_jfalse(Func *f, BlockId block, BlockId false_target, Instr cond) {
+  append_block_instr(f, block, (Instr) { .tag = IR_JFALSE, .lhs = intern_instr(f, cond), .rhs = false_target });
 }
 
-void emit_ret(Func *f, BlockId block, InstrId retval) {
-  append_block_instr(f, block, (Instr) { .tag = IR_RET, .lhs = retval });
+void emit_ret(Func *f, BlockId block, Instr retval) {
+  append_block_instr(f, block, (Instr) { .tag = IR_RET, .lhs = intern_instr(f, retval) });
 }
 
-void emit_upsilon(Func *f, BlockId block, InstrId val, InstrId phi) {
-  append_block_instr(f, block, (Instr) { .tag = IR_UPSILON, .lhs = val, .rhs = phi });
+void emit_upsilon(Func *f, BlockId block, Instr val, InstrId phi) {
+  append_block_instr(f, block, (Instr) { .tag = IR_UPSILON, .lhs = intern_instr(f, val), .rhs = phi });
 }
 
-InstrId emit_phi(Func *f, BlockId block) {
-  return prepend_block_instr(f, block, (Instr) { .tag = IR_PHI });
+static InstrId do_emit_phi(Func *f) {
+  return emit_instr_unpinned(f, (Instr) { .tag = IR_PHI });
+}
+
+Instr emit_phi(Func *f) {
+  return to_value_instr(f, do_emit_phi(f));
 }
 
 
@@ -407,39 +474,40 @@ InstrId emit_phi(Func *f, BlockId block) {
 
 typedef union {
   struct { i16 block, var; };
-  i32 u32_value;
+  i32 u32_repr;
 } BindingKey;
 
 static InstrId create_pred_upsilons(Func *f, BlockId block, InstrId phi);
 
-void write_variable(Func *f, BlockId block, VarId var, InstrId val) {
+void write_variable(Func *f, BlockId block, VarId var, Instr val) {
   BindingKey key = {{ block, var }};
-  u32_to_u32_put(&f->bindings, key.u32_value, val);
+  u32_to_u64_put(&f->bindings, key.u32_repr, val.u64_repr);
 }
 
-InstrId read_variable(Func *f, BlockId block, VarId var) {
+Instr read_variable(Func *f, BlockId block, VarId var) {
   BindingKey key = {{ block, var }};
-  u32 found;
-  if (u32_to_u32_get(&f->bindings, key.u32_value, &found)) {
+  Instr found;
+  if (u32_to_u64_get(&f->bindings, key.u32_repr, &found.u64_repr)) {
     return found;
   }
 
-  InstrId val;
+  Instr result;
   Block *b = get_block(f, block);
   if (!b->is_sealed) {
-    val = emit_phi(f, block);
-    list_push(val, &b->incomplete_phis, &f->list_entries);
+    InstrId phi = do_emit_phi(f);
+    list_push(phi, &b->incomplete_phis, &f->list_entries);
+    result = to_value_instr(f, phi);
   } else if (b->preds.values[0] && !b->preds.values[1]) {
     // exactly one predecessor
-    val = read_variable(f, b->preds.values[0], var);
+    result = read_variable(f, b->preds.values[0], var);
   } else {
-    val = emit_phi(f, block);
-    write_variable(f, block, var, val);
-    val = create_pred_upsilons(f, block, val);
+    InstrId phi = do_emit_phi(f);
+    write_variable(f, block, var, to_value_instr(f, phi));
+    result = to_value_instr(f, create_pred_upsilons(f, block, phi));
   }
 
-  write_variable(f, block, var, val);
-  return val;
+  write_variable(f, block, var, result);
+  return result;
 }
 
 static InstrId try_remove_trivial_phi(Func *f, InstrId phi) {
@@ -482,7 +550,7 @@ static InstrId create_pred_upsilons(Func *f, BlockId block, InstrId phi) {
     for (int i = 0; i < 3; ++i) {
       BlockId pred = e->values[i];
       if (!pred) goto end;
-      InstrId val = read_variable(f, pred, var);
+      Instr val = read_variable(f, pred, var);
       emit_upsilon(f, pred, val, phi);
     }
     if (!e->next) break;
@@ -498,7 +566,7 @@ void seal_block(Func *f, BlockId block) {
   assert(!b->is_sealed);
   for (ListEntry *e = &b->incomplete_phis; ; e = f->list_entries + e->next) {
     for (int i = 0; i < 3; ++i) {
-      BlockId phi = e->values[i];
+      InstrId phi = e->values[i];
       if (!phi) goto end;
       create_pred_upsilons(f, block, phi);
     }
@@ -521,10 +589,6 @@ static Instr reemit_dependencies(Func *f, Instr *code, i16 *map, Instr instr) {
       instr.lhs = reemit_dependency(f, code, map, instr.lhs);
       break;
     case IR_UPSILON:
-      instr.lhs = reemit_dependency(f, code, map, instr.lhs);
-      instr.rhs = map[instr.rhs];
-      assert(instr.rhs);
-      break;
     case IR_ADD:
     case IR_EQ:
       instr.lhs = reemit_dependency(f, code, map, instr.lhs);
@@ -546,33 +610,35 @@ static InstrId reemit_dependency(Func *f, Instr *code, i16 *map, InstrId id) {
   return map[id] = emit_instr_unpinned(f, reemit_dependencies(f, code, map, code[src]));
 }
 
-static void reemit_block(Func *f, BlockId block, Vector(Block) blocks, Instr *code, i16 *map) {
+static void reemit_block(Func *f, BlockId block, Vector(Block) blocks, Vector(ListEntry) list_entries, Instr *code, i16 *map) {
   Block *b = blocks + block;
   if (b->is_visited) {
     return;
   }
   b->is_visited = true;
 
-  for (ListEntry *e = &b->prefix; ; e = f->list_entries + e->next) {
+  for (ListEntry *e = &b->prefix; ; e = list_entries + e->next) {
     for (int i = 0; i < 3; ++i) {
       InstrId id = e->values[i];
       if (!id) goto prefix_done;
-      map[id] = emit_instr_pinned(f, code[id]);
+      print_instr(f, id, code[id]);
+      map[id] = emit_instr_pinned(f, reemit_dependencies(f, code, map, code[id]));
     }
     if (!e->next) break;
   }
 prefix_done:
 
   for (InstrId id = b->start; id < b->end; ++id) {
-    Instr instr = code[id];
-    map[id] = emit_instr_pinned(f, instr);
+    print_instr(f, id, code[id]);
+    map[id] = emit_instr_pinned(f, reemit_dependencies(f, code, map, code[id]));
   }
 
-  for (ListEntry *e = &b->suffix; ; e = f->list_entries + e->next) {
+  for (ListEntry *e = &b->suffix; ; e = list_entries + e->next) {
     for (int i = 0; i < 3; ++i) {
       InstrId id = e->values[i];
       if (!id) goto suffix_done;
-      map[id] = emit_instr_pinned(f, code[id]);
+      print_instr(f, id, code[id]);
+      map[id] = emit_instr_pinned(f, reemit_dependencies(f, code, map, code[id]));
     }
     if (!e->next) break;
   }
@@ -580,7 +646,7 @@ suffix_done:
 
   for (int i = 0; i < 2; ++i) {
     if (b->succs[i]) {
-      reemit_block(f, b->succs[i], blocks, code, map);
+      reemit_block(f, b->succs[i], blocks, list_entries, code, map);
     }
   }
 }
@@ -605,14 +671,15 @@ static void reemit_all(Func *f) {
   vector_free(f->vars);
   f->vars = NULL;
 
+  vector_clear(f->upsilons);
   u64_to_u32_clear(&f->ircache);
-  u32_to_u32_clear(&f->bindings);
+  u32_to_u64_clear(&f->bindings);
 
-  reemit_block(f, 1, blocks, code, map);
+  reemit_block(f, 1, blocks, list_entries, code, map);
 
-  for (InstrId id = 1; id < f->numpos; ++id) {
+  /*for (InstrId id = 1; id < f->numpos; ++id) {
     f->code[id] = reemit_dependencies(f, code, map, f->code[id]);
-  }
+  }*/
 
   InstrId id;
   vector_foreach(f->upsilons, id) {
@@ -627,36 +694,6 @@ static void reemit_all(Func *f) {
   free(code_base_ptr);
 }
 
-
-
-
-
-static void print_ir(Func *f) {
-  for (InstrId id = -f->numneg; id < f->numpos; ++id) {
-    Instr instr = f->code[id];
-    switch (instr.tag) {
-      case IR_NOP: printf("  NOP\n"); break;
-      case IR_IDENTITY: printf("  %d = ID %d\n", id, instr.lhs); break;
-      case IR_LABEL: printf(":%d\n", instr.rhs); break;
-      case IR_JUMP: printf("  JUMP :%d\n", instr.rhs); break;
-      case IR_JFALSE: printf("  JFALSE %d :%d\n", instr.lhs, instr.rhs); break;
-      case IR_RET: printf("  RET %d\n", instr.lhs); break;
-      case IR_UPSILON: printf("  UPSILON %d %d [%s]\n", instr.lhs, instr.rhs, f->vars[f->code[instr.rhs].rhs].name); break;
-      case IR_PHI: printf("  %d = PHI\n", id); break; 
-      case IR_CONST:
-        switch (instr.type) {
-          case TY_VOID: printf("  %d = CONST void\n", id); break;
-          case TY_BOOL: printf("  %d = CONST %s\n", id, instr.bool_const ? "true" : "false"); break;
-          case TY_I32: printf("  %d = CONST %d\n", id, instr.i32_const); break;
-          default: assert(0); break;
-        }
-        break;
-      case IR_ADD: printf("  %d = ADD %d %d\n", id, instr.lhs, instr.rhs); break;
-      case IR_EQ: printf("  %d = EQ %d %d\n", id, instr.lhs, instr.rhs); break;
-      default: assert(0); break;
-    }
-  }
-}
 
 
 
@@ -677,7 +714,7 @@ int main(int argc, char *argv[]) {
   
   seal_block(f, then_block);
   emit_label(f, then_block);
-  write_variable(f, then_block, x, emit_add(f, read_variable(f, then_block, x), emit_i32(f, 10)));
+  write_variable(f, then_block, x, emit_add(f, read_variable(f, then_block, x), emit_add(f, emit_i32(f, 5), emit_i32(f, 5))));
   emit_jump(f, then_block, exit_block);
   
   seal_block(f, else_block);
@@ -689,7 +726,13 @@ int main(int argc, char *argv[]) {
   emit_label(f, exit_block);
   emit_ret(f, exit_block, read_variable(f, exit_block, x));
 
-  //reemit_all(f);
+  /*printf("before:\n");
+  print_ir(f);
+
+  printf("\nreemit:\n");
+  reemit_all(f);
+  
+  printf("\nafter:\n");*/
   print_ir(f);
 
   return 0;
