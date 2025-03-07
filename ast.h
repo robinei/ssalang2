@@ -2,91 +2,97 @@
 
 #include "defs.h"
 
-typedef struct AstRef {
-    u32 offset;
-} AstRef;
+typedef u32 AstRef;
+typedef AstRef AstNodeRef;
 
-typedef struct AstText {
-    u32 offset;
-    u32 length;
-} AstText;
+typedef enum AstNodeTag {
+  AST_TAG_TYPE_ATOM,
+  
+  AST_TAG_LOCAL_WRITE,
+  AST_TAG_LOCAL_READ,
+  AST_TAG_BLOCK,
+  AST_TAG_IF,
+  AST_TAG_WHILE,
+  AST_TAG_BREAK,
+  AST_TAG_CONT,
+  AST_TAG_FUNC,
+} AstNodeTag;
 
-typedef enum AstTag {
-    AST_COMMENT,
-    AST_MODULE,
-    AST_BLOCK,
-    AST_LET,
-    AST_IF,
-    AST_WHILE,
-} AstTag;
-
-#define AST_COMMON AstTag tag : 8; u32 flags : 24; u32 source_pos;
-
-#define AST_FLAG_INLINE 1
-#define AST_FLAG_CONST 2
-#define AST_FLAG_STATIC 4
+typedef enum AstTypeAtomTag {
+  AST_TYPE_ATOM_VOID,
+  AST_TYPE_ATOM_BOOL,
+  AST_TYPE_ATOM_I32,
+} AstTypeAtomTag;
 
 typedef struct AstNode {
-    AST_COMMON
+  AstNodeTag tag : 8;
+  u32 source_pos : 24;
 } AstNode;
 
-typedef struct AstComment {
-    AST_COMMON
-    AstText text;
-} AstComment;
+typedef struct AstTypeAtomNode {
+  AstNode node;
+  AstTypeAtomTag atom;
+} AstTypeAtomNode;
 
-typedef struct AstModule {
-    AST_COMMON
-    u32 nodes_size;
-    AstRef nodes[];
-} AstModule;
+typedef struct AstLocalWriteNode {
+  AstNode node;
+  bool is_definition : 1;
+  u32 local_index : 31;
+  AstNodeRef expr;
+} AstLocalWriteNode;
 
-typedef struct AstBlock {
-    AST_COMMON
-    u32 nodes_size;
-    AstRef nodes[];
-} AstBlock;
+typedef struct AstLocalReadNode {
+  AstNode node;
+  u32 local_index;
+} AstLocalReadNode;
 
-typedef struct AstLet {
-    AST_COMMON
-    AstText name;
-    AstRef type;
-    AstRef expr;
-} AstLet;
+typedef struct AstBlockNode {
+  AstNode node;
+  bool is_static : 1;
+  u32 scope_index : 31;
+  u32 nodes_count;
+  AstNodeRef nodes[];
+} AstBlockNode;
 
-typedef struct AstIf {
-    AST_COMMON
-    AstRef cond;
-    AstRef then;
-    AstRef els;
-} AstIf;
+typedef struct AstIfNode {
+  AstNode node;
+  bool is_static : 1;
+  bool is_inline : 1;
+  u32 scope_index : 30;
+  AstNodeRef cond;
+  AstNodeRef then;
+  AstNodeRef els;
+} AstIfNode;
 
-typedef struct AstWhile {
-    AST_COMMON
-    AstRef cond;
-    AstRef body;
-} AstWhile;
+typedef struct AstWhileNode {
+  AstNode node;
+  bool is_static : 1;
+  bool is_inline : 1;
+  u32 scope_index : 30;
+  AstNodeRef cond;
+  AstNodeRef body;
+} AstWhileNode;
 
-typedef struct AstFunc {
-    AST_COMMON
-    AstRef body;
-    AstRef return_type;
-    u32 params_size;
-    AstParam params[];
-} AstFunc;
+typedef struct AstBreakContNode {
+  AstNode node;
+  bool is_static : 1;
+  u32 scope_index : 31;
+} AstBreakContNode;
 
-typedef struct AstParam {
-    u32 flags;
-    AstText name;
-    AstRef type;
-} AstParam;
+typedef struct AstLocal {
+  bool is_param : 1;
+  bool is_static : 1;
+  bool is_const : 1;
+  AstNodeRef type : 29;
+} AstLocal;
 
-
-
-typedef struct ParseContext {
-    char *buffer;
-    u32 buffer_size;
-    u32 buffer_capacity;    
-} ParseContext;
-
-
+typedef struct AstFuncNode {
+  AstNode node;
+  bool is_static : 1;
+  bool is_inline : 1;
+  AstNodeRef body : 30;
+  AstNodeRef return_type;
+  u32 params_count; // the params_count first locals are the parameters
+  u32 locals_count;
+  AstLocal locals[];
+} AstFuncNode;
