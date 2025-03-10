@@ -70,8 +70,9 @@ typedef struct Variable {
 
 typedef struct Block {
   u32 is_sealed : 1;
+  u32 is_filled : 1;
   u32 is_visited : 1;
-  u32 start : 30;
+  u32 start : 29;
   u16 succs[2];
   ListEntry preds;
   ListEntry incomplete_phis;
@@ -104,7 +105,6 @@ static void print_instr(IrGen *gen, InstrId id, Instr instr) {
     case IR_BRANCH: printf("  BRANCH %d :%d :%d\n", instr.extra, instr.lhs, instr.rhs); break;
     case IR_RET: printf("  RET %d\n", instr.lhs); break;
     case IR_UPSILON: printf("  UPSILON %d %d\n", instr.lhs, instr.rhs); break;
-    case IR_PHI: printf("  %d = PHI\n", id); break; 
     case IR_CONST:
       switch (instr.type) {
         case TY_VOID: printf("  %d = CONST void\n", id); break;
@@ -113,6 +113,8 @@ static void print_instr(IrGen *gen, InstrId id, Instr instr) {
         default: assert(0); break;
       }
       break;
+    case IR_PHI: printf("  %d = PHI #%d\n", id, instr.rhs); break;
+    case IR_ARG: printf("  %d = ARG #%d\n", id, instr.rhs); break;
     case IR_ADD: printf("  %d = ADD %d %d\n", id, instr.lhs, instr.rhs); break;
     case IR_EQ: printf("  %d = EQ %d %d\n", id, instr.lhs, instr.rhs); break;
     default: assert(0); break;
@@ -250,6 +252,9 @@ static InstrId intern_instr(IrGen *gen, Instr instr) {
 
 
 void irgen_label(IrGen *gen, BlockId block) {
+  if (gen->curr_block) {
+    assert(get_block(gen, gen->curr_block)->is_filled);
+  }
   InstrId id = emit_instr_pinned(gen, (Instr) { .tag = IR_LABEL, .rhs = block });
   Block *b = get_block(gen, block);
   b->start = id;
@@ -262,6 +267,7 @@ void irgen_jump(IrGen *gen, BlockId block, BlockId target) {
   assert(!b->succs[0]);
   assert(!tb->is_sealed);
   b->succs[0] = target;
+  b->is_filled = true;
   list_push(gen->curr_block, &tb->preds, &gen->list_entries);
   append_block_instr(gen, block, (Instr) { .tag = IR_JUMP, .rhs = target });
 }
@@ -281,12 +287,15 @@ void irgen_branch(IrGen *gen, BlockId block, Instr cond, BlockId true_target, Bl
   assert(!fb->is_sealed);
   b->succs[0] = true_target;
   b->succs[1] = false_target;
+  b->is_filled = true;
   list_push(gen->curr_block, &tb->preds, &gen->list_entries);
   list_push(gen->curr_block, &fb->preds, &gen->list_entries);
   append_block_instr(gen, block, (Instr) { .tag = IR_BRANCH, .extra = intern_instr(gen, cond), .lhs = true_target, .rhs = false_target });
 }
 
 void irgen_ret(IrGen *gen, BlockId block, Instr retval) {
+  Block *b = get_block(gen, block);
+  b->is_filled = true;
   append_block_instr(gen, block, (Instr) { .tag = IR_RET, .lhs = intern_instr(gen, retval) });
 }
 
@@ -486,6 +495,7 @@ static void fixup_block(IrGen *gen, IrGen *source, i16 *map, BlockId block) {
   }
   b->is_visited = true;
   assert(b->is_sealed);
+  assert(b->is_filled);
 
   InstrId source_id = b->start;
   while (!IR_IS_TERMINAL(source->code[source_id].tag)) {
@@ -503,7 +513,7 @@ static void fixup_block(IrGen *gen, IrGen *source, i16 *map, BlockId block) {
   }
 suffix_done:
 
-  fixup_instr(gen, source, map, source_id);
+  fixup_instr(gen, source, map, source_id); // terminal instruction
 
   for (int i = 0; i < 2; ++i) {
     if (b->succs[i]) {
@@ -515,6 +525,7 @@ suffix_done:
 void irgen_fixup(IrGen *gen, IrGen *source) {
   i16 map_buffer[65536] = { 0, };
   i16 *map = map_buffer + 32768; // map from old to new InstrId
+  gen->phi_count = gen->phi_count;
   fixup_block(gen, source, map, 1);
 }
 
@@ -532,14 +543,14 @@ int main(int argc, char *argv[]) {
   irgen_seal(gen, entry_block);
   irgen_label(gen, entry_block);
   irgen_write_variable(gen, entry_block, x, irgen_const_i32(gen, 1));
-  irgen_branch(gen, entry_block, irgen_const_bool(gen, true), then_block, else_block);
-  
+  irgen_branch(gen, entry_block, irgen_arg(gen, 0, TY_BOOL), then_block, else_block);
   irgen_seal(gen, then_block);
+  irgen_seal(gen, else_block);
+
   irgen_label(gen, then_block);
   irgen_write_variable(gen, then_block, x, irgen_add(gen, irgen_read_variable(gen, then_block, x), irgen_add(gen, irgen_const_i32(gen, 5), irgen_const_i32(gen, 5))));
   irgen_jump(gen, then_block, exit_block);
   
-  irgen_seal(gen, else_block);
   irgen_label(gen, else_block);
   irgen_write_variable(gen, else_block, x, irgen_add(gen, irgen_read_variable(gen, else_block, x), irgen_const_i32(gen, 10)));
   irgen_jump(gen, else_block, exit_block);
