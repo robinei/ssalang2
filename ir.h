@@ -16,6 +16,7 @@ typedef enum InstrTag {
   
   IR_LABEL, // identify the start of BlockId rhs
 
+  // terminals
   IR_JUMP, // unconditional jump to BlockId rhs
   IR_BRANCH, // jump to BlockId rhs if the condition value lhs is false
   IR_RET, // return value lhs

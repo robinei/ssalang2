@@ -258,10 +258,6 @@ void irgen_label(IrGen *gen, BlockId block) {
 
 void irgen_jump(IrGen *gen, BlockId block, BlockId target) {
   Block *b = get_block(gen, block);
-  if (b->succs[0] ) {
-    // already has IR_JUMP instr
-    return;
-  }
   Block *tb = get_block(gen, target);
   assert(!b->succs[0]);
   assert(!tb->is_sealed);
@@ -271,10 +267,14 @@ void irgen_jump(IrGen *gen, BlockId block, BlockId target) {
 }
 
 void irgen_branch(IrGen *gen, BlockId block, Instr cond, BlockId true_target, BlockId false_target) {
+  assert(cond.type == TY_BOOL);
+  if (cond.tag == IR_CONST) {
+    irgen_jump(gen, block, cond.bool_const ? true_target : false_target);
+    return;
+  }
   Block *b = get_block(gen, block);
   Block *tb = get_block(gen, true_target);
   Block *fb = get_block(gen, false_target);
-  assert(cond.type == TY_BOOL);
   assert(!b->succs[0]);
   assert(!b->succs[1]);
   assert(!tb->is_sealed);
@@ -448,112 +448,75 @@ end:
 
 
 
-static InstrId reemit_dependency(IrGen *gen, Instr *code, i16 *map, InstrId id);
+static InstrId fixup_instr(IrGen *gen, IrGen *source, i16 *map, InstrId source_id) {
+  printf("fixup: "); print_instr(source, source_id, source->code[source_id]);
+  if (map[source_id]) {
+    return map[source_id];
+  }
 
-static Instr reemit_dependencies(IrGen *gen, Instr *code, i16 *map, Instr instr) {
+#define FIXUP(Id) gen->code[fixup_instr(gen, source, map, Id)]
+#define FIXUP_BINOP(EmitFunc) intern_instr(gen, EmitFunc(gen, FIXUP(instr.lhs), FIXUP(instr.rhs)))
+
+  InstrId dest_id = 0;
+  Instr instr = source->code[source_id];
   switch (instr.tag) {
-    case IR_BRANCH:
-      instr.extra = reemit_dependency(gen, code, map, instr.extra);
-      break;
-    case IR_RET:
-      instr.lhs = reemit_dependency(gen, code, map, instr.lhs);
-      break;
-    case IR_UPSILON:
-    case IR_ADD:
-    case IR_EQ:
-      instr.lhs = reemit_dependency(gen, code, map, instr.lhs);
-      instr.rhs = reemit_dependency(gen, code, map, instr.rhs);
-      break;
+    case IR_NOP: return 0;
+    case IR_IDENTITY: dest_id = fixup_instr(gen, source, map, instr.lhs); break;
+    case IR_LABEL: irgen_label(gen, instr.rhs); return 0;
+    case IR_JUMP: irgen_jump(gen, gen->curr_block, instr.rhs); return 0;
+    case IR_BRANCH: irgen_branch(gen, gen->curr_block, FIXUP(instr.extra), instr.lhs, instr.rhs); return 0;
+    case IR_RET: irgen_ret(gen, gen->curr_block, FIXUP(instr.lhs)); return 0;
+    case IR_UPSILON: irgen_upsilon(gen, gen->curr_block, FIXUP(instr.lhs), FIXUP(instr.rhs)); return 0;
+    case IR_CONST: dest_id = intern_instr(gen, instr); break;
+    case IR_PHI: dest_id = intern_instr(gen, instr); break;
+    case IR_ARG: dest_id = intern_instr(gen, instr); break;
+    case IR_ADD: dest_id = FIXUP_BINOP(irgen_add); break;
+    case IR_EQ: dest_id = FIXUP_BINOP(irgen_eq); break;
+    default: assert(0 && "unknown instruction");
   }
-  return instr;
+
+  map[source_id] = dest_id;
+  return dest_id;
 }
 
-static InstrId reemit_dependency(IrGen *gen, Instr *code, i16 *map, InstrId id) {
-  if (map[id]) {
-    return map[id];
-  }
-  InstrId src = id;
-  //while (code[src].tag == IR_IDENTITY) {
-  //  src = code[src].lhs;
-  //}
-  assert(IR_IS_PURE(code[id].tag));
-  return map[id] = emit_instr_unpinned(gen, reemit_dependencies(gen, code, map, code[src]));
-}
-
-static void reemit_block(IrGen *gen, BlockId block, Vector(Block) blocks, Vector(ListEntry) list_entries, Instr *code, i16 *map) {
-  Block *b = blocks + block;
+static void fixup_block(IrGen *gen, IrGen *source, i16 *map, BlockId block) {
+  Block *b = get_block(source, block);
   if (b->is_visited) {
     return;
   }
   b->is_visited = true;
+  assert(b->is_sealed);
 
-  for (InstrId id = b->start; ; ++id) {
-    map[id] = emit_instr_pinned(gen, reemit_dependencies(gen, code, map, code[id]));
-    if (IR_IS_TERMINAL(code[id].tag)) {
-      break;
-    }
+  InstrId source_id = b->start;
+  while (!IR_IS_TERMINAL(source->code[source_id].tag)) {
+    assert(source_id < source->maxpos);
+    fixup_instr(gen, source, map, source_id++);
   }
 
-  for (ListEntry *e = &b->suffix; ; e = list_entries + e->next) {
+  for (ListEntry *e = &b->suffix; ; e = source->list_entries + e->next) {
     for (int i = 0; i < 3; ++i) {
       InstrId id = e->values[i];
       if (!id) goto suffix_done;
-      map[id] = emit_instr_pinned(gen, reemit_dependencies(gen, code, map, code[id]));
+      fixup_instr(gen, source, map, id);
     }
     if (!e->next) break;
   }
 suffix_done:
 
+  fixup_instr(gen, source, map, source_id);
+
   for (int i = 0; i < 2; ++i) {
     if (b->succs[i]) {
-      reemit_block(gen, b->succs[i], blocks, list_entries, code, map);
+      fixup_block(gen, source, map, b->succs[i]);
     }
   }
 }
 
-static void reemit_all(IrGen *gen) {
+void irgen_fixup(IrGen *gen, IrGen *source) {
   i16 map_buffer[65536] = { 0, };
   i16 *map = map_buffer + 32768; // map from old to new InstrId
-
-  Instr *code = gen->code;
-  assert(code);
-  Instr *code_base_ptr = code - gen->maxneg;
-  int end_id = gen->numpos;
-  init_code_array(gen);
-
-  Vector(ListEntry) list_entries = vector_clone(gen->list_entries);
-  gen->list_entries = NULL;
-
-  Vector(Block) blocks = vector_clone(gen->blocks);
-  gen->blocks = NULL;
-  gen->curr_block = 0;
-
-  vector_free(gen->vars);
-  gen->vars = NULL;
-
-  vector_clear(gen->upsilons);
-  u64_to_u32_clear(&gen->ircache);
-  u32_to_u64_clear(&gen->bindings);
-
-  reemit_block(gen, 1, blocks, list_entries, code, map);
-
-  /*for (InstrId id = 1; id < gen->numpos; ++id) {
-    gen->code[id] = reemit_dependencies(gen, code, map, gen->code[id]);
-  }*/
-
-  InstrId id;
-  vector_foreach(gen->upsilons, id) {
-    InstrId phi = map[gen->code[id].rhs];
-    assert(gen->code[id].tag == IR_UPSILON);
-    assert(phi);
-    gen->code[id].rhs = phi;
-  }
-
-  vector_free(list_entries);
-  vector_free(blocks);
-  free(code_base_ptr);
+  fixup_block(gen, source, map, 1);
 }
-
 
 
 
@@ -585,14 +548,17 @@ int main(int argc, char *argv[]) {
   irgen_label(gen, exit_block);
   irgen_ret(gen, exit_block, irgen_read_variable(gen, exit_block, x));
 
-  /*printf("before:\n");
+  printf("before:\n");
   print_ir(gen);
 
-  printf("\nreemit:\n");
-  reemit_all(gen);
+  IrGen *fixed = irgen_create();
+  irgen_fixup(fixed, gen);
   
-  printf("\nafter:\n");*/
-  print_ir(gen);
+  printf("\nafter:\n");
+  print_ir(fixed);
+
+  irgen_destroy(gen);
+  irgen_destroy(fixed);
 
   return 0;
 }
