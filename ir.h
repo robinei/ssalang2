@@ -2,10 +2,7 @@
 
 #include "defs.h"
 
-typedef i16 InstrId; // signed, so that pure instructions can have negative id (that way we don't commit to any sequencing of them early)
-typedef u32 BlockId;
 typedef u32 TypeId;
-typedef u32 VarId;
 
 enum {
   TY_VOID,

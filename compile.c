@@ -56,13 +56,13 @@ Instr ast_compile(AstNodeRef noderef, bool static_eval, CompileContext *ctx) {
     switch (basenode->tag) {
       case AST_TAG_CONST_BOOL: {
         AstConstNode *node = (AstConstNode *)basenode;
-        result = emit_bool(ctx->gen, node->bool_value);
+        result = irgen_const_bool(ctx->gen, node->bool_value);
         break;
       }
 
       case AST_TAG_CONST_I32: {
         AstConstNode *node = (AstConstNode *)basenode;
-        result = emit_i32(ctx->gen, node->i32_value);
+        result = irgen_const_i32(ctx->gen, node->i32_value);
         break;
       }
 
@@ -70,7 +70,7 @@ Instr ast_compile(AstNodeRef noderef, bool static_eval, CompileContext *ctx) {
         AstBinopNode *node = (AstBinopNode *)basenode;
         Instr left = ast_compile(node->left_node, static_eval, ctx);
         Instr right = ast_compile(node->right_node, static_eval, ctx);
-        result = emit_add(ctx->gen, left, right);
+        result = irgen_add(ctx->gen, left, right);
         break;
       }
 
@@ -78,7 +78,7 @@ Instr ast_compile(AstNodeRef noderef, bool static_eval, CompileContext *ctx) {
         AstBinopNode *node = (AstBinopNode *)basenode;
         Instr left = ast_compile(node->left_node, static_eval, ctx);
         Instr right = ast_compile(node->right_node, static_eval, ctx);
-        result = emit_eq(ctx->gen, left, right);
+        result = irgen_eq(ctx->gen, left, right);
         break;
       }
 
@@ -92,7 +92,7 @@ Instr ast_compile(AstNodeRef noderef, bool static_eval, CompileContext *ctx) {
         if (!slot->is_defined) {
           assert(node->is_definition);
           slot->type = ast_resolve_type(local->type, ctx);
-          slot->var = create_variable(ctx->gen, slot->type);
+          slot->var = irgen_create_variable(ctx->gen, slot->type);
           slot->is_defined = true;
         }
         else {
@@ -101,7 +101,7 @@ Instr ast_compile(AstNodeRef noderef, bool static_eval, CompileContext *ctx) {
         
         slot->value = ast_compile(node->expr, static_eval, ctx);
         assert(slot->type == slot->value.type);
-        write_variable(ctx->gen, ctx->block, slot->var, slot->value);
+        irgen_write_variable(ctx->gen, ctx->block, slot->var, slot->value);
         break;
       }
 
@@ -115,10 +115,10 @@ Instr ast_compile(AstNodeRef noderef, bool static_eval, CompileContext *ctx) {
           result = slot->value;
         }
         else if (local->is_param) {
-          result = emit_arg(ctx->gen, node->local_index, slot->type);
+          result = irgen_arg(ctx->gen, node->local_index, slot->type);
         }
         else {
-          result = read_variable(ctx->gen, ctx->block, slot->var);
+          result = irgen_read_variable(ctx->gen, ctx->block, slot->var);
         }
         break;
       }
@@ -148,32 +148,32 @@ Instr ast_compile(AstNodeRef noderef, bool static_eval, CompileContext *ctx) {
           }
         }
         else {
-          BlockId then_block = create_block(ctx->gen);
-          BlockId else_block = node->els ? create_block(ctx->gen) : 0;
-          BlockId exit_block = create_block(ctx->gen);
+          BlockId then_block = irgen_create_block(ctx->gen);
+          BlockId else_block = node->els ? irgen_create_block(ctx->gen) : 0;
+          BlockId exit_block = irgen_create_block(ctx->gen);
           
           Instr cond = ast_compile(node->cond, static_eval, ctx);
           assert(cond.type == TY_BOOL);
-          emit_jfalse(ctx->gen, ctx->block, else_block ? else_block : exit_block, cond);
-          emit_jump(ctx->gen, ctx->block, then_block);
+          irgen_jfalse(ctx->gen, ctx->block, else_block ? else_block : exit_block, cond);
+          irgen_jump(ctx->gen, ctx->block, then_block);
 
-          emit_label(ctx->gen, then_block);
+          irgen_label(ctx->gen, then_block);
           ctx->block = then_block;
           Instr then_result = ast_compile(node->then, static_eval, ctx);
-          Instr phi = emit_phi(ctx->gen, then_result.type);
-          emit_upsilon(ctx->gen, then_block, then_result, phi);
-          emit_jump(ctx->gen, then_block, exit_block);
+          Instr phi = irgen_phi(ctx->gen, then_result.type);
+          irgen_upsilon(ctx->gen, then_block, then_result, phi);
+          irgen_jump(ctx->gen, then_block, exit_block);
 
           if (else_block) {
-            emit_label(ctx->gen, else_block);
+            irgen_label(ctx->gen, else_block);
             ctx->block = else_block;
             Instr else_result = ast_compile(node->els, static_eval, ctx);
             assert(then_result.type == else_result.type);
-            emit_upsilon(ctx->gen, else_block, else_result, phi);
-            emit_jump(ctx->gen, else_block, exit_block);
+            irgen_upsilon(ctx->gen, else_block, else_result, phi);
+            irgen_jump(ctx->gen, else_block, exit_block);
           }
 
-          emit_label(ctx->gen, exit_block);
+          irgen_label(ctx->gen, exit_block);
           ctx->block = exit_block;
           result = phi;
         }
@@ -206,28 +206,28 @@ Instr ast_compile(AstNodeRef noderef, bool static_eval, CompileContext *ctx) {
           }
         }
         else {
-          BlockId cond_block = create_block(ctx->gen);
-          BlockId body_block = create_block(ctx->gen);
-          BlockId exit_block = create_block(ctx->gen);
+          BlockId cond_block = irgen_create_block(ctx->gen);
+          BlockId body_block = irgen_create_block(ctx->gen);
+          BlockId exit_block = irgen_create_block(ctx->gen);
 
-          emit_jump(ctx->gen, ctx->block, cond_block);
+          irgen_jump(ctx->gen, ctx->block, cond_block);
 
-          emit_label(ctx->gen, cond_block);
+          irgen_label(ctx->gen, cond_block);
           ctx->block = cond_block;
           Instr cond = ast_compile(node->cond, false, ctx);
           assert(cond.type == TY_BOOL);
-          emit_jfalse(ctx->gen, ctx->block, exit_block, cond);
-          emit_jump(ctx->gen, ctx->block, body_block);
+          irgen_jfalse(ctx->gen, ctx->block, exit_block, cond);
+          irgen_jump(ctx->gen, ctx->block, body_block);
 
           slot->break_target = exit_block;
           slot->cont_target = cond_block;
 
-          emit_label(ctx->gen, body_block);
+          irgen_label(ctx->gen, body_block);
           ctx->block = body_block;
           ast_compile(node->body, false, ctx);
-          emit_jump(ctx->gen, ctx->block, cond_block);
+          irgen_jump(ctx->gen, ctx->block, cond_block);
 
-          emit_label(ctx->gen, exit_block);
+          irgen_label(ctx->gen, exit_block);
           ctx->block = exit_block;
         }
         break;
@@ -242,11 +242,11 @@ Instr ast_compile(AstNodeRef noderef, bool static_eval, CompileContext *ctx) {
         }
         else if (basenode->tag == AST_TAG_BREAK) {
           assert(slot->break_target);
-          emit_jump(ctx->gen, ctx->block, slot->break_target);
+          irgen_jump(ctx->gen, ctx->block, slot->break_target);
         }
         else {
           assert(slot->cont_target);
-          emit_jump(ctx->gen, ctx->block, slot->cont_target);
+          irgen_jump(ctx->gen, ctx->block, slot->cont_target);
         }
         break;
       }
@@ -254,7 +254,7 @@ Instr ast_compile(AstNodeRef noderef, bool static_eval, CompileContext *ctx) {
       case AST_TAG_RETURN: {
         AstReturnNode *node = (AstReturnNode *)basenode;
         Instr value = ast_compile(node->value_node, static_eval, ctx);
-        emit_ret(ctx->gen, ctx->block, value);
+        irgen_ret(ctx->gen, ctx->block, value);
         break;
       }
     }

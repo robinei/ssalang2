@@ -61,6 +61,8 @@ start:
 
 
 
+typedef i16 InstrId; // signed, so that pure instructions can have negative id (that way we don't commit to any sequencing of them early)
+
 typedef struct Variable {
   TypeId type;
 } Variable;
@@ -125,7 +127,7 @@ static void print_ir(IrGen *gen) {
 
 
 
-BlockId create_block(IrGen *gen) {
+BlockId irgen_create_block(IrGen *gen) {
   BlockId id = vector_size(gen->blocks);
   assert(id < INT16_MAX);
   vector_push(gen->blocks, (Block) { });
@@ -135,7 +137,7 @@ BlockId create_block(IrGen *gen) {
 static Block *get_block(IrGen *gen, BlockId block) {
   assert(block);
   while (vector_size(gen->blocks) <= block) {
-    create_block(gen);
+    irgen_create_block(gen);
   }
   return gen->blocks + block;
 }
@@ -148,14 +150,24 @@ static void init_code_array(IrGen *gen) {
   gen->numneg = 0;
 }
 
-IrGen *create_func() {
+IrGen *irgen_create(void) {
   IrGen *gen = calloc(1, sizeof(IrGen));
   init_code_array(gen);
-  create_block(gen); // block at index 0 should not be used
+  irgen_create_block(gen); // block at index 0 should not be used
   return gen;
 }
 
-VarId create_variable(IrGen *gen, TypeId type) {
+void irgen_destroy(IrGen *gen) {
+  vector_free(gen->blocks);
+  vector_free(gen->vars);
+  vector_free(gen->list_entries);
+  vector_free(gen->upsilons);
+  u32_to_u64_cleanup(&gen->bindings);
+  u32_to_u64_cleanup(&gen->ircache);
+  free(gen);
+}
+
+VarId irgen_create_variable(IrGen *gen, TypeId type) {
   VarId id = vector_size(gen->vars);
   assert(id < INT16_MAX);
   vector_push(gen->vars, ((Variable) { .type = type }));
@@ -237,14 +249,14 @@ static InstrId intern_instr(IrGen *gen, Instr instr) {
 
 
 
-void emit_label(IrGen *gen, BlockId block) {
+void irgen_label(IrGen *gen, BlockId block) {
   InstrId id = emit_instr_pinned(gen, (Instr) { .tag = IR_LABEL, .rhs = block });
   Block *b = get_block(gen, block);
   b->start = id;
   gen->curr_block = block;
 }
 
-void emit_jump(IrGen *gen, BlockId block, BlockId target) {
+void irgen_jump(IrGen *gen, BlockId block, BlockId target) {
   Block *b = get_block(gen, block);
   if (b->succs[0] ) {
     // already has IR_JUMP instr
@@ -258,7 +270,7 @@ void emit_jump(IrGen *gen, BlockId block, BlockId target) {
   append_block_instr(gen, block, (Instr) { .tag = IR_JUMP, .rhs = target });
 }
 
-void emit_jfalse(IrGen *gen, BlockId block, BlockId false_target, Instr cond) {
+void irgen_jfalse(IrGen *gen, BlockId block, BlockId false_target, Instr cond) {
   Block *b = get_block(gen, block);
   Block *tb = get_block(gen, false_target);
   assert(cond.type == TY_BOOL);
@@ -270,34 +282,34 @@ void emit_jfalse(IrGen *gen, BlockId block, BlockId false_target, Instr cond) {
   append_block_instr(gen, block, (Instr) { .tag = IR_JFALSE, .lhs = intern_instr(gen, cond), .rhs = false_target });
 }
 
-void emit_ret(IrGen *gen, BlockId block, Instr retval) {
+void irgen_ret(IrGen *gen, BlockId block, Instr retval) {
   append_block_instr(gen, block, (Instr) { .tag = IR_RET, .lhs = intern_instr(gen, retval) });
 }
 
-void emit_upsilon(IrGen *gen, BlockId block, Instr val, Instr phi) {
+void irgen_upsilon(IrGen *gen, BlockId block, Instr val, Instr phi) {
   if (phi.type != TY_VOID) {
     InstrId id = append_block_instr(gen, block, (Instr) { .tag = IR_UPSILON, .lhs = intern_instr(gen, val), .rhs = intern_instr(gen, phi) });
     vector_push(gen->upsilons, id);
   }
 }
 
-Instr emit_bool(IrGen *gen, bool val) {
+Instr irgen_const_bool(IrGen *gen, bool val) {
   return (Instr) { .tag = IR_CONST, .type = TY_BOOL, .bool_const = val };
 }
 
-Instr emit_i32(IrGen *gen, i32 val) {
+Instr irgen_const_i32(IrGen *gen, i32 val) {
   return (Instr) { .tag = IR_CONST, .type = TY_I32, .i32_const = val };
 }
 
-Instr emit_phi(IrGen *gen, TypeId type) {
+Instr irgen_phi(IrGen *gen, TypeId type) {
   return (Instr) { .tag = IR_PHI, .type = type, .rhs = ++gen->phi_count };
 }
 
-Instr emit_arg(IrGen *gen, u32 arg, TypeId type) {
+Instr irgen_arg(IrGen *gen, u32 arg, TypeId type) {
   return (Instr) { .tag = IR_ARG, .type = type, .rhs = arg };
 }
 
-Instr emit_add(IrGen *gen, Instr lhs, Instr rhs) {
+Instr irgen_add(IrGen *gen, Instr lhs, Instr rhs) {
   assert(lhs.type == rhs.type);
   if (lhs.tag == IR_CONST && rhs.tag == IR_CONST) {
     switch (lhs.type) {
@@ -308,7 +320,7 @@ Instr emit_add(IrGen *gen, Instr lhs, Instr rhs) {
   return (Instr) { .tag = IR_ADD, .type = lhs.type, .lhs = intern_instr(gen, lhs), .rhs = intern_instr(gen, rhs) };
 }
 
-Instr emit_eq(IrGen *gen, Instr lhs, Instr rhs) {
+Instr irgen_eq(IrGen *gen, Instr lhs, Instr rhs) {
   assert(lhs.type == rhs.type);
   if (lhs.tag == IR_CONST && rhs.tag == IR_CONST) {
     switch (lhs.type) {
@@ -331,12 +343,12 @@ typedef union {
 
 static InstrId create_pred_upsilons(IrGen *gen, BlockId block, InstrId phi);
 
-void write_variable(IrGen *gen, BlockId block, VarId var, Instr val) {
+void irgen_write_variable(IrGen *gen, BlockId block, VarId var, Instr val) {
   BindingKey key = {{ block, var }};
   u32_to_u64_put(&gen->bindings, key.u32_repr, val.u64_repr);
 }
 
-Instr read_variable(IrGen *gen, BlockId block, VarId var) {
+Instr irgen_read_variable(IrGen *gen, BlockId block, VarId var) {
   BindingKey key = {{ block, var }};
   Instr found;
   if (u32_to_u64_get(&gen->bindings, key.u32_repr, &found.u64_repr)) {
@@ -346,19 +358,19 @@ Instr read_variable(IrGen *gen, BlockId block, VarId var) {
   Instr result;
   Block *b = get_block(gen, block);
   if (!b->is_sealed) {
-    Instr phi = emit_phi(gen, gen->vars[var].type);
+    Instr phi = irgen_phi(gen, gen->vars[var].type);
     list_push(intern_instr(gen, phi), &b->incomplete_phis, &gen->list_entries);
     result = phi;
   } else if (b->preds.values[0] && !b->preds.values[1]) {
     // exactly one predecessor
-    result = read_variable(gen, b->preds.values[0], var);
+    result = irgen_read_variable(gen, b->preds.values[0], var);
   } else {
-    Instr phi = emit_phi(gen, gen->vars[var].type);
-    write_variable(gen, block, var, phi);
+    Instr phi = irgen_phi(gen, gen->vars[var].type);
+    irgen_write_variable(gen, block, var, phi);
     result = to_instr(gen, create_pred_upsilons(gen, block, intern_instr(gen, phi)));
   }
 
-  write_variable(gen, block, var, result);
+  irgen_write_variable(gen, block, var, result);
   return result;
 }
 
@@ -402,8 +414,8 @@ static InstrId create_pred_upsilons(IrGen *gen, BlockId block, InstrId phi) {
     for (int i = 0; i < 3; ++i) {
       BlockId pred = e->values[i];
       if (!pred) goto end;
-      Instr val = read_variable(gen, pred, var);
-      emit_upsilon(gen, pred, val, to_instr(gen, phi));
+      Instr val = irgen_read_variable(gen, pred, var);
+      irgen_upsilon(gen, pred, val, to_instr(gen, phi));
     }
     if (!e->next) break;
   }
@@ -413,7 +425,7 @@ end:
   //return try_remove_trivial_phi(gen, phi);
 }
 
-void seal_block(IrGen *gen, BlockId block) {
+void irgen_seal(IrGen *gen, BlockId block) {
   Block *b = get_block(gen, block);
   assert(!b->is_sealed);
   for (ListEntry *e = &b->incomplete_phis; ; e = gen->list_entries + e->next) {
@@ -541,32 +553,32 @@ static void reemit_all(IrGen *gen) {
 
 
 int main(int argc, char *argv[]) {
-  IrGen *gen = create_func();
-  VarId x = create_variable(gen, TY_I32);
-  BlockId entry_block = create_block(gen);
-  BlockId then_block = create_block(gen);
-  BlockId else_block = create_block(gen);
-  BlockId exit_block = create_block(gen);
+  IrGen *gen = irgen_create();
+  VarId x = irgen_create_variable(gen, TY_I32);
+  BlockId entry_block = irgen_create_block(gen);
+  BlockId then_block = irgen_create_block(gen);
+  BlockId else_block = irgen_create_block(gen);
+  BlockId exit_block = irgen_create_block(gen);
 
-  seal_block(gen, entry_block);
-  emit_label(gen, entry_block);
-  write_variable(gen, entry_block, x, emit_i32(gen, 1));
-  emit_jfalse(gen, entry_block, else_block, emit_bool(gen, true));
-  emit_jump(gen, entry_block, then_block);
+  irgen_seal(gen, entry_block);
+  irgen_label(gen, entry_block);
+  irgen_write_variable(gen, entry_block, x, irgen_const_i32(gen, 1));
+  irgen_jfalse(gen, entry_block, else_block, irgen_const_bool(gen, true));
+  irgen_jump(gen, entry_block, then_block);
   
-  seal_block(gen, then_block);
-  emit_label(gen, then_block);
-  write_variable(gen, then_block, x, emit_add(gen, read_variable(gen, then_block, x), emit_add(gen, emit_i32(gen, 5), emit_i32(gen, 5))));
-  emit_jump(gen, then_block, exit_block);
+  irgen_seal(gen, then_block);
+  irgen_label(gen, then_block);
+  irgen_write_variable(gen, then_block, x, irgen_add(gen, irgen_read_variable(gen, then_block, x), irgen_add(gen, irgen_const_i32(gen, 5), irgen_const_i32(gen, 5))));
+  irgen_jump(gen, then_block, exit_block);
   
-  seal_block(gen, else_block);
-  emit_label(gen, else_block);
-  write_variable(gen, else_block, x, emit_add(gen, read_variable(gen, else_block, x), emit_i32(gen, 10)));
-  emit_jump(gen, else_block, exit_block);
+  irgen_seal(gen, else_block);
+  irgen_label(gen, else_block);
+  irgen_write_variable(gen, else_block, x, irgen_add(gen, irgen_read_variable(gen, else_block, x), irgen_const_i32(gen, 10)));
+  irgen_jump(gen, else_block, exit_block);
 
-  seal_block(gen, exit_block);
-  emit_label(gen, exit_block);
-  emit_ret(gen, exit_block, read_variable(gen, exit_block, x));
+  irgen_seal(gen, exit_block);
+  irgen_label(gen, exit_block);
+  irgen_ret(gen, exit_block, irgen_read_variable(gen, exit_block, x));
 
   /*printf("before:\n");
   print_ir(gen);
