@@ -17,7 +17,7 @@ typedef enum InstrTag {
   IR_LABEL, // identify the start of BlockId rhs
 
   IR_JUMP, // unconditional jump to BlockId rhs
-  IR_JFALSE, // jump to BlockId rhs if the condition value lhs is false
+  IR_BRANCH, // jump to BlockId rhs if the condition value lhs is false
   IR_RET, // return value lhs
 
   IR_UPSILON, // assign lhs value to rhs phi
@@ -37,7 +37,8 @@ typedef enum InstrTag {
 typedef union Instr {
   struct {
     InstrTag tag : 8;
-    TypeId type : 24;
+    TypeId type : 8;
+    i32 extra : 16;
     union {
       struct {
         i16 lhs, rhs;

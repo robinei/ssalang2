@@ -14,7 +14,7 @@ Instr irgen_read_variable(IrGen *gen, BlockId block, VarId var);
 
 void irgen_label(IrGen *gen, BlockId block);
 void irgen_jump(IrGen *gen, BlockId block, BlockId target);
-void irgen_jfalse(IrGen *gen, BlockId block, BlockId false_target, Instr cond);
+void irgen_branch(IrGen *gen, BlockId block, Instr cond, BlockId true_target, BlockId false_target);
 void irgen_ret(IrGen *gen, BlockId block, Instr retval);
 
 void irgen_upsilon(IrGen *gen, BlockId block, Instr val, Instr phi);

@@ -101,7 +101,7 @@ static void print_instr(IrGen *gen, InstrId id, Instr instr) {
     case IR_IDENTITY: printf("  %d = ID %d\n", id, instr.lhs); break;
     case IR_LABEL: printf(":%d\n", instr.rhs); break;
     case IR_JUMP: printf("  JUMP :%d\n", instr.rhs); break;
-    case IR_JFALSE: printf("  JFALSE %d :%d\n", instr.lhs, instr.rhs); break;
+    case IR_BRANCH: printf("  BRANCH %d :%d :%d\n", instr.extra, instr.lhs, instr.rhs); break;
     case IR_RET: printf("  RET %d\n", instr.lhs); break;
     case IR_UPSILON: printf("  UPSILON %d %d\n", instr.lhs, instr.rhs); break;
     case IR_PHI: printf("  %d = PHI\n", id); break; 
@@ -163,7 +163,7 @@ void irgen_destroy(IrGen *gen) {
   vector_free(gen->list_entries);
   vector_free(gen->upsilons);
   u32_to_u64_cleanup(&gen->bindings);
-  u32_to_u64_cleanup(&gen->ircache);
+  u64_to_u32_cleanup(&gen->ircache);
   free(gen);
 }
 
@@ -270,16 +270,20 @@ void irgen_jump(IrGen *gen, BlockId block, BlockId target) {
   append_block_instr(gen, block, (Instr) { .tag = IR_JUMP, .rhs = target });
 }
 
-void irgen_jfalse(IrGen *gen, BlockId block, BlockId false_target, Instr cond) {
+void irgen_branch(IrGen *gen, BlockId block, Instr cond, BlockId true_target, BlockId false_target) {
   Block *b = get_block(gen, block);
-  Block *tb = get_block(gen, false_target);
+  Block *tb = get_block(gen, true_target);
+  Block *fb = get_block(gen, false_target);
   assert(cond.type == TY_BOOL);
   assert(!b->succs[0]);
   assert(!b->succs[1]);
   assert(!tb->is_sealed);
+  assert(!fb->is_sealed);
+  b->succs[0] = true_target;
   b->succs[1] = false_target;
   list_push(gen->curr_block, &tb->preds, &gen->list_entries);
-  append_block_instr(gen, block, (Instr) { .tag = IR_JFALSE, .lhs = intern_instr(gen, cond), .rhs = false_target });
+  list_push(gen->curr_block, &fb->preds, &gen->list_entries);
+  append_block_instr(gen, block, (Instr) { .tag = IR_BRANCH, .extra = intern_instr(gen, cond), .lhs = true_target, .rhs = false_target });
 }
 
 void irgen_ret(IrGen *gen, BlockId block, Instr retval) {
@@ -448,7 +452,9 @@ static InstrId reemit_dependency(IrGen *gen, Instr *code, i16 *map, InstrId id);
 
 static Instr reemit_dependencies(IrGen *gen, Instr *code, i16 *map, Instr instr) {
   switch (instr.tag) {
-    case IR_JFALSE:
+    case IR_BRANCH:
+      instr.extra = reemit_dependency(gen, code, map, instr.extra);
+      break;
     case IR_RET:
       instr.lhs = reemit_dependency(gen, code, map, instr.lhs);
       break;
@@ -563,8 +569,7 @@ int main(int argc, char *argv[]) {
   irgen_seal(gen, entry_block);
   irgen_label(gen, entry_block);
   irgen_write_variable(gen, entry_block, x, irgen_const_i32(gen, 1));
-  irgen_jfalse(gen, entry_block, else_block, irgen_const_bool(gen, true));
-  irgen_jump(gen, entry_block, then_block);
+  irgen_branch(gen, entry_block, irgen_const_bool(gen, true), then_block, else_block);
   
   irgen_seal(gen, then_block);
   irgen_label(gen, then_block);

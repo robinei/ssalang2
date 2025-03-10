@@ -154,8 +154,7 @@ Instr ast_compile(AstNodeRef noderef, bool static_eval, CompileContext *ctx) {
           
           Instr cond = ast_compile(node->cond, static_eval, ctx);
           assert(cond.type == TY_BOOL);
-          irgen_jfalse(ctx->gen, ctx->block, else_block ? else_block : exit_block, cond);
-          irgen_jump(ctx->gen, ctx->block, then_block);
+          irgen_branch(ctx->gen, ctx->block, cond, then_block, else_block ? else_block : exit_block);
 
           irgen_label(ctx->gen, then_block);
           ctx->block = then_block;
@@ -216,8 +215,7 @@ Instr ast_compile(AstNodeRef noderef, bool static_eval, CompileContext *ctx) {
           ctx->block = cond_block;
           Instr cond = ast_compile(node->cond, false, ctx);
           assert(cond.type == TY_BOOL);
-          irgen_jfalse(ctx->gen, ctx->block, exit_block, cond);
-          irgen_jump(ctx->gen, ctx->block, body_block);
+          irgen_branch(ctx->gen, ctx->block, cond, body_block, exit_block);
 
           slot->break_target = exit_block;
           slot->cont_target = cond_block;
