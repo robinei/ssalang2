@@ -160,7 +160,7 @@ IrInstr ast_compile(AstNodeRef noderef, bool static_eval, CompileContext *ctx) {
           irgen_label(gen, then_block);
           ctx->block = then_block;
           IrInstr then_result = ast_compile(node->then, static_eval, ctx);
-          IrInstr phi = irgen_phi(gen, then_result.type);
+          IrInstr phi = then_result.type != TY_VOID ? irgen_phi(gen, then_result.type) : (IrInstr) { };
           irgen_upsilon(gen, then_block, then_result, phi);
           irgen_jump(gen, then_block, exit_block);
 

@@ -2,8 +2,6 @@
 
 #include "ir.h"
 
-typedef i32 IrVarRef;
-
 typedef struct IrGen IrGen;
 
 IrGen *irgen_create(void);

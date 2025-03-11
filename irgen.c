@@ -141,18 +141,15 @@ static BasicBlock *get_block(IrGen *gen, IrBlockRef block) {
   return gen->blocks + block;
 }
 
-static void init_code_array(IrGen *gen) {
-  gen->maxneg = gen->maxpos = 16;
-  gen->code = (IrInstr *)malloc(sizeof(IrInstr) * (gen->maxneg + gen->maxpos)) + gen->maxneg;
-  gen->code[0] = (IrInstr) { .tag = IR_NOP, .type = TY_VOID, }; // let instr at index 0 be NOP
-  gen->numpos = 1;
-  gen->numneg = 0;
-}
-
 IrGen *irgen_create(void) {
   IrGen *gen = calloc(1, sizeof(IrGen));
-  init_code_array(gen);
+  gen->maxneg = gen->maxpos = 16;
+  gen->code = (IrInstr *)malloc(sizeof(IrInstr) * (gen->maxneg + gen->maxpos)) + gen->maxneg;
+  gen->code[0] = (IrInstr) { }; // let instr at index 0 be NOP
+  gen->numpos = 1; // reserve NOP slot
+  gen->numneg = 0;
   irgen_create_block(gen); // block at index 0 should not be used
+  irgen_create_variable(gen, TY_VOID); // var at index 0 should not be used
   return gen;
 }
 
@@ -167,7 +164,8 @@ void irgen_destroy(IrGen *gen) {
 }
 
 void irgen_clear(IrGen *gen) {
-  gen->numpos = 0;
+  gen->code[0] = (IrInstr) { }; // let instr at index 0 be NOP
+  gen->numpos = 1; // reserve NOP slot
   gen->numneg = 0;
   gen->phi_count = 0;
   gen->curr_block = 0;
@@ -177,6 +175,8 @@ void irgen_clear(IrGen *gen) {
   vector_clear(gen->upsilons);
   u32_to_u64_clear(&gen->bindings);
   u64_to_u32_clear(&gen->ircache);
+  irgen_create_block(gen); // block at index 0 should not be used
+  irgen_create_variable(gen, TY_VOID); // var at index 0 should not be used
 }
 
 IrVarRef irgen_create_variable(IrGen *gen, IrType type) {
@@ -331,10 +331,13 @@ IrInstr irgen_const_i32(IrGen *gen, i32 val) {
 }
 
 IrInstr irgen_phi(IrGen *gen, IrType type) {
+  assert(type != TY_VOID);
   return (IrInstr) { .tag = IR_PHI, .type = type, .arg0 = ++gen->phi_count };
 }
 
 IrInstr irgen_arg(IrGen *gen, u32 arg, IrType type) {
+  assert(arg >= 0);
+  assert(type != TY_VOID);
   return (IrInstr) { .tag = IR_ARG, .type = type, .arg0 = arg };
 }
 
@@ -370,9 +373,11 @@ typedef union {
   i32 u32_repr;
 } BindingKey;
 
-static IrInstrRef create_pred_upsilons(IrGen *gen, IrBlockRef block, IrInstrRef phi);
+static IrInstr create_pred_upsilons(IrGen *gen, IrBlockRef block, IrInstr phi);
 
 void irgen_write_variable(IrGen *gen, IrBlockRef block, IrVarRef var, IrInstr val) {
+  printf("block %d WRITE: ", block); print_instr(gen, var, val);
+  assert(val.type != TY_VOID);
   BindingKey key = {{ block, var }};
   u32_to_u64_put(&gen->bindings, key.u32_repr, val.u64_repr);
 }
@@ -381,6 +386,7 @@ IrInstr irgen_read_variable(IrGen *gen, IrBlockRef block, IrVarRef var) {
   BindingKey key = {{ block, var }};
   IrInstr found;
   if (u32_to_u64_get(&gen->bindings, key.u32_repr, &found.u64_repr)) {
+    printf("block %d READ: ", block); print_instr(gen, var, found);
     return found;
   }
 
@@ -388,6 +394,7 @@ IrInstr irgen_read_variable(IrGen *gen, IrBlockRef block, IrVarRef var) {
   BasicBlock *b = get_block(gen, block);
   if (!b->is_sealed) {
     IrInstr phi = irgen_phi(gen, gen->vars[var].type);
+    phi.arg1 = var;
     list_push(intern_instr(gen, phi), &b->incomplete_phis, &gen->list_entries);
     result = phi;
   } else if (b->preds.values[0] && !b->preds.values[1]) {
@@ -395,11 +402,13 @@ IrInstr irgen_read_variable(IrGen *gen, IrBlockRef block, IrVarRef var) {
     result = irgen_read_variable(gen, b->preds.values[0], var);
   } else {
     IrInstr phi = irgen_phi(gen, gen->vars[var].type);
+    phi.arg1 = var;
     irgen_write_variable(gen, block, var, phi);
-    result = to_instr(gen, create_pred_upsilons(gen, block, intern_instr(gen, phi)));
+    result = create_pred_upsilons(gen, block, phi);
   }
 
   irgen_write_variable(gen, block, var, result);
+  printf("block %d READ: ", block); print_instr(gen, var, result);
   return result;
 }
 
@@ -410,9 +419,9 @@ static IrInstrRef try_remove_trivial_phi(IrGen *gen, IrInstrRef phi) {
   IrInstrRef same = 0, ref;
   vector_foreach(gen->upsilons, ref) {
     IrInstr instr = gen->code[ref];
-    if (instr.arg2 == phi) {
-      // this is an upsilon which writes the shadow variable for this phi (so it is in effect an operand)
-      IrInstrRef op = instr.arg1;
+    if (instr.arg1 == phi) {
+      // this is an upsilon which writes the shadow variable for this phi (so it is in effect a phi operand)
+      IrInstrRef op = instr.arg0;
       if (op == same || op == phi) {
         continue;
       }
@@ -420,11 +429,11 @@ static IrInstrRef try_remove_trivial_phi(IrGen *gen, IrInstrRef phi) {
         return phi;
       }
       same = op;
-    } else if (instr.arg1 == phi) {
+    } else if (instr.arg0 == phi) {
       // this upsilon defines an operand to a different phi, but the value written is this phi.
       // record this phi user, so we can try to recursively remove trivial phis.
       assert(phi_users_count < 128);
-      phi_users[phi_users_count++] = instr.arg2;
+      phi_users[phi_users_count++] = instr.arg1;
     }
   }
 
@@ -436,20 +445,48 @@ static IrInstrRef try_remove_trivial_phi(IrGen *gen, IrInstrRef phi) {
   }
 }
 
-static IrInstrRef create_pred_upsilons(IrGen *gen, IrBlockRef block, IrInstrRef phi) {
-  IrVarRef var = gen->code[phi].arg2;
+
+static IrInstr create_pred_upsilons(IrGen *gen, IrBlockRef block, IrInstr phi) {
+  IrBlockRef preds[32];
+  IrInstr values[32];
+  int num_values = 0;
+
+  IrInstr same = (IrInstr) { };
+  IrVarRef var = phi.arg1;
   BasicBlock *b = get_block(gen, block);
   for (ListEntry *e = &b->preds; ; e = gen->list_entries + e->next) {
     for (int i = 0; i < 3; ++i) {
       IrBlockRef pred = e->values[i];
       if (!pred) goto end;
       IrInstr val = irgen_read_variable(gen, pred, var);
-      irgen_upsilon(gen, pred, val, to_instr(gen, phi));
+      assert(num_values < 32);
+      preds[num_values] = pred;
+      values[num_values++] = val;
+      if (!same.u64_repr && val.u64_repr != phi.u64_repr) {
+        same = val;
+      } 
     }
     if (!e->next) break;
   }
-
 end:
+
+  if (same.u64_repr) {
+    bool all_equal = true;
+    for (int i = 0; i < num_values; ++i) {
+      if (values[i].u64_repr != same.u64_repr && values[i].u64_repr != phi.u64_repr) {
+        all_equal = false;
+        break;
+      }
+    }
+    if (all_equal) {
+      return same;
+    }
+  }
+
+  for (int i = 0; i < num_values; ++i) {
+    irgen_upsilon(gen, preds[i], values[i], phi);
+  }
+
   return phi;
   //return try_remove_trivial_phi(gen, phi);
 }
@@ -461,7 +498,7 @@ void irgen_seal_block(IrGen *gen, IrBlockRef block) {
     for (int i = 0; i < 3; ++i) {
       IrInstrRef phi = e->values[i];
       if (!phi) goto end;
-      create_pred_upsilons(gen, block, phi);
+      create_pred_upsilons(gen, block, gen->code[phi]);
     }
     if (!e->next) break;
   }
@@ -474,7 +511,6 @@ end:
 
 
 static IrInstrRef fixup_instr(IrGen *gen, IrGen *source, i16 *map, IrInstrRef source_id) {
-  printf("fixup: "); print_instr(source, source_id, source->code[source_id]);
   if (map[source_id]) {
     return map[source_id];
   }
