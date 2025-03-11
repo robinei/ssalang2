@@ -12,7 +12,7 @@ static u32 next_power_of_two(u32 v) {
   v++;
 }
 
-AstGen *astgen_new(void) {
+AstGen *astgen_create(void) {
   AstGen *astgen = calloc(1, sizeof(AstGen));
   return astgen;
 }

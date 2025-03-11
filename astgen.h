@@ -2,13 +2,15 @@
 
 #include "ast.h"
 
-typedef struct AstGen {
+typedef struct AstGen AstGen;
+
+struct AstGen {
   char *buffer;
   u32 buffer_used;
   u32 buffer_size;
-} AstGen;
+};
 
-AstGen *astgen_new(void);
+AstGen *astgen_create(void);
 void astgen_destroy(AstGen *astgen);
 
 AstNodeRef astgen_type_atom(AstGen *astgen, AstTypeAtomTag atom);

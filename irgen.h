@@ -2,26 +2,38 @@
 
 #include "ir.h"
 
-typedef u32 BlockId;
-typedef u32 VarId;
+typedef i32 IrVarRef;
 
 typedef struct IrGen IrGen;
 
-BlockId irgen_create_block(IrGen *gen);
-VarId irgen_create_variable(IrGen *gen, TypeId type);
-void irgen_write_variable(IrGen *gen, BlockId block, VarId var, Instr val);
-Instr irgen_read_variable(IrGen *gen, BlockId block, VarId var);
+IrGen *irgen_create(void);
+void irgen_destroy(IrGen *gen);
+void irgen_clear(IrGen *gen);
 
-void irgen_label(IrGen *gen, BlockId block);
-void irgen_jump(IrGen *gen, BlockId block, BlockId target);
-void irgen_branch(IrGen *gen, BlockId block, Instr cond, BlockId true_target, BlockId false_target);
-void irgen_ret(IrGen *gen, BlockId block, Instr retval);
+IrBlockRef irgen_create_block(IrGen *gen);
+void irgen_seal_block(IrGen *gen, IrBlockRef block);
 
-void irgen_upsilon(IrGen *gen, BlockId block, Instr val, Instr phi);
+IrVarRef irgen_create_variable(IrGen *gen, IrType type);
+void irgen_write_variable(IrGen *gen, IrBlockRef block, IrVarRef var, IrInstr val);
+IrInstr irgen_read_variable(IrGen *gen, IrBlockRef block, IrVarRef var);
 
-Instr irgen_const_bool(IrGen *gen, bool val);
-Instr irgen_const_i32(IrGen *gen, i32 val);
-Instr irgen_add(IrGen *gen, Instr lhs, Instr rhs);
-Instr irgen_phi(IrGen *gen, TypeId type);
-Instr irgen_arg(IrGen *gen, u32 arg, TypeId type);
-Instr irgen_eq(IrGen *gen, Instr lhs, Instr rhs);
+// all blocks must start with a label instruction, identifying it
+void irgen_label(IrGen *gen, IrBlockRef block);
+
+// terminals (all blocks must end with exactly one of these)
+void irgen_jump(IrGen *gen, IrBlockRef block, IrBlockRef target);
+void irgen_branch(IrGen *gen, IrBlockRef block, IrInstr cond, IrBlockRef true_target, IrBlockRef false_target);
+void irgen_ret(IrGen *gen, IrBlockRef block, IrInstr retval);
+
+void irgen_upsilon(IrGen *gen, IrBlockRef block, IrInstr val, IrInstr phi);
+
+// pure instruction contructors (just pure computation and data dependencies, no side effects)
+IrInstr irgen_const_bool(IrGen *gen, bool val);
+IrInstr irgen_const_i32(IrGen *gen, i32 val);
+IrInstr irgen_add(IrGen *gen, IrInstr arg1, IrInstr arg2);
+IrInstr irgen_phi(IrGen *gen, IrType type);
+IrInstr irgen_arg(IrGen *gen, u32 arg, IrType type);
+IrInstr irgen_eq(IrGen *gen, IrInstr arg1, IrInstr arg2);
+
+void irgen_print_ir(IrGen *gen);
+void irgen_fixup_ir(IrGen *gen, IrGen *source);

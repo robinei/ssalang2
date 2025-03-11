@@ -2,47 +2,51 @@
 
 #include "defs.h"
 
-typedef u32 TypeId;
+typedef i16 IrOperand;
 
-enum {
+typedef IrOperand IrInstrRef; // signed, so that pure instructions can have negative index (that way we don't commit to any sequencing of them early)
+typedef IrOperand IrBlockRef;
+
+typedef enum IrType {
   TY_VOID,
   TY_BOOL,
   TY_I32,
-};
+} IrType;
 
-typedef enum InstrTag {
+
+// annotated with types for (arg0[, arg1[, arg2]])
+typedef enum IrInstrTag {
   IR_NOP,
-  IR_IDENTITY, // replace with lhs value
+  IR_IDENTITY, // (IrInstrRef replace_with)
   
-  IR_LABEL, // identify the start of BlockId rhs
+  IR_LABEL, // (IrBlockRef block)
 
   // terminals
-  IR_JUMP, // unconditional jump to BlockId rhs
-  IR_BRANCH, // jump to BlockId rhs if the condition value lhs is false
-  IR_RET, // return value lhs
+  IR_JUMP, // (IrBlockRef target)
+  IR_BRANCH, // (IrInstrRef cond, IrBlockRef true_target, IrBlockRef false_target)
+  IR_RET, // (IrInstrRef value)
 
-  IR_UPSILON, // assign lhs value to rhs phi
+  IR_UPSILON, // (IrInstrRef value, IrInstrRef phi)
 
   // all after this point must be pure
   IR_CONST,
-  IR_PHI,
-  IR_ARG, // argument with rhs being index
-  IR_ADD,
-  IR_EQ,
-} InstrTag;
+  IR_PHI, // (IrOperand unique_phi_id)
+  IR_ARG, // (IrOperand argument_index)
+  IR_ADD, // (IrInstrRef lhs, IrInstrRef rhs)
+  IR_EQ, // (IrInstrRef lhs, IrInstrRef rhs)
+} IrInstrTag;
 
-#define IR_IS_PURE(x) ((x) >= IR_CONST)
-#define IR_IS_TERMINAL(x) ((x) >= IR_JUMP && (x) <= IR_RET)
+#define IR_IS_PURE_INSTR(x) ((x) >= IR_CONST)
+#define IR_IS_TERMINAL_INSTR(x) ((x) >= IR_JUMP && (x) <= IR_RET)
 
-
-typedef union Instr {
+typedef union IrInstr {
   struct {
-    InstrTag tag : 8;
-    TypeId type : 8;
-    i32 extra : 16;
+    IrInstrTag tag : 8;
+    IrType type : 8;
+    IrOperand arg0 : 16;
     union {
       struct {
-        i16 lhs, rhs;
+        IrOperand arg1, arg2;
       };
       bool bool_const;
       i32 i32_const;
@@ -51,4 +55,4 @@ typedef union Instr {
     };
   };
   u64 u64_repr;
-} Instr;
+} IrInstr;
