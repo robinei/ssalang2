@@ -58,6 +58,10 @@ start:
   }
 }
 
+#define list_foreach(Item, Head, Entries) \
+  for (ListEntry *__entry = &(Head); __entry; __entry = __entry->next ? (Entries) + __entry->next : NULL) \
+  for (int __index = 0; __index < 3 && (Item = __entry->values[__index]); ++__index)
+
 
 
 typedef struct Variable {
@@ -66,10 +70,10 @@ typedef struct Variable {
 
 
 typedef struct BasicBlock {
-  u32 is_sealed : 1;
-  u32 is_filled : 1;
-  u32 is_visited : 1;
-  u32 start : 29;
+  u32 sealed : 1;
+  u32 visited : 1;
+  u32 first : 15;
+  u32 last : 15;
   u16 succs[2];
   ListEntry preds;
   ListEntry incomplete_phis;
@@ -126,6 +130,8 @@ void irgen_print_ir(IrGen *gen) {
 
 
 
+
+
 IrBlockRef irgen_create_block(IrGen *gen) {
   i32 block = vector_size(gen->blocks);
   assert(block < INT16_MAX);
@@ -140,6 +146,29 @@ static BasicBlock *get_block(IrGen *gen, IrBlockRef block) {
   }
   return gen->blocks + block;
 }
+
+static IrBlockRef skip_trivial_successors(IrGen *gen, IrBlockRef succ) {
+  BasicBlock *b = get_block(gen, succ);
+  if (b->last == b->first + 1 && b->succs[0] && !b->succs[1]) {
+    // block has only a single jump instruction
+    assert(gen->code[b->last].tag == IR_JUMP);
+    return skip_trivial_successors(gen, b->succs[0]);
+  }
+  return succ;
+}
+
+static IrInstrRef get_trivial_exit(IrGen *gen, IrBlockRef block) {
+  BasicBlock *s = get_block(gen, block);
+  if (s->last == s->first + 1) {
+    if (gen->code[s->last].tag == IR_RET) {
+      return s->last;
+    }
+  }
+  return 0;
+}
+
+
+
 
 IrGen *irgen_create(void) {
   IrGen *gen = calloc(1, sizeof(IrGen));
@@ -262,56 +291,58 @@ static IrInstrRef intern_instr(IrGen *gen, IrInstr instr) {
 
 
 void irgen_label(IrGen *gen, IrBlockRef block) {
+  assert(!gen->curr_block || get_block(gen, gen->curr_block)->last);
   BasicBlock *b = get_block(gen, block);
-  assert(!b->start);
-  assert(!b->is_filled);
+  assert(!b->first);
+  assert(!b->last);
   assert(!b->succs[0]);
   assert(!b->succs[1]);
-  assert(!gen->curr_block || get_block(gen, gen->curr_block)->is_filled);
   IrInstrRef ref = emit_instr_pinned(gen, (IrInstr) { .tag = IR_LABEL, .arg0 = block });
-  b->start = ref;
+  b->first = ref;
   gen->curr_block = block;
 }
 
-void irgen_jump(IrGen *gen, IrBlockRef block, IrBlockRef target) {
-  BasicBlock *b = get_block(gen, block);
+void irgen_jump(IrGen *gen, IrBlockRef target) {
+  BasicBlock *b = get_block(gen, gen->curr_block);
   BasicBlock *tb = get_block(gen, target);
-  assert(!b->is_filled);
+  assert(!b->last);
   assert(!b->succs[0]);
-  assert(!tb->is_sealed);
+  assert(!tb->sealed);
   b->succs[0] = target;
-  b->is_filled = true;
   list_push(gen->curr_block, &tb->preds, &gen->list_entries);
-  append_block_instr(gen, block, (IrInstr) { .tag = IR_JUMP, .arg0 = target });
+  b->last = emit_instr_pinned(gen, (IrInstr) { .tag = IR_JUMP, .arg0 = target });
 }
 
-void irgen_branch(IrGen *gen, IrBlockRef block, IrInstr cond, IrBlockRef true_target, IrBlockRef false_target) {
-  BasicBlock *b = get_block(gen, block);
+void irgen_branch(IrGen *gen, IrInstr cond, IrBlockRef true_target, IrBlockRef false_target) {
+  BasicBlock *b = get_block(gen, gen->curr_block);
   BasicBlock *tb = get_block(gen, true_target);
   BasicBlock *fb = get_block(gen, false_target);
-  assert(!b->is_filled);
+  assert(!b->last);
   assert(!b->succs[0]);
   assert(!b->succs[1]);
-  assert(!tb->is_sealed);
-  assert(!fb->is_sealed);
+  assert(!tb->sealed);
+  assert(!fb->sealed);
   assert(cond.type == TY_BOOL);
   if (cond.tag == IR_CONST) {
-    irgen_jump(gen, block, cond.bool_const ? true_target : false_target);
+    irgen_jump(gen, cond.bool_const ? true_target : false_target);
+    return;
+  }
+  if (true_target == false_target) {
+    irgen_jump(gen, true_target);
     return;
   }
   b->succs[0] = true_target;
   b->succs[1] = false_target;
-  b->is_filled = true;
   list_push(gen->curr_block, &tb->preds, &gen->list_entries);
   list_push(gen->curr_block, &fb->preds, &gen->list_entries);
-  append_block_instr(gen, block, (IrInstr) { .tag = IR_BRANCH, .arg0 = intern_instr(gen, cond), .arg1 = true_target, .arg2 = false_target });
+  b->last = emit_instr_pinned(gen, (IrInstr) { .tag = IR_BRANCH, .arg0 = intern_instr(gen, cond), .arg1 = true_target, .arg2 = false_target });
 }
 
-void irgen_ret(IrGen *gen, IrBlockRef block, IrInstr retval) {
-  BasicBlock *b = get_block(gen, block);
-  assert(!b->is_filled);
-  b->is_filled = true;
-  append_block_instr(gen, block, (IrInstr) { .tag = IR_RET, .arg0 = intern_instr(gen, retval) });
+void irgen_ret(IrGen *gen, IrInstr retval) {
+  BasicBlock *b = get_block(gen, gen->curr_block);
+  assert(!b->last);
+  IrInstr instr = (IrInstr) { .tag = IR_RET, .arg0 = intern_instr(gen, retval) };
+  b->last = emit_instr_pinned(gen, instr);
 }
 
 void irgen_upsilon(IrGen *gen, IrBlockRef block, IrInstr val, IrInstr phi) {
@@ -392,7 +423,7 @@ IrInstr irgen_read_variable(IrGen *gen, IrBlockRef block, IrVarRef var) {
 
   IrInstr result;
   BasicBlock *b = get_block(gen, block);
-  if (!b->is_sealed) {
+  if (!b->sealed) {
     IrInstr phi = irgen_phi(gen, gen->vars[var].type);
     phi.arg1 = var;
     list_push(intern_instr(gen, phi), &b->incomplete_phis, &gen->list_entries);
@@ -417,7 +448,7 @@ static IrInstrRef try_remove_trivial_phi(IrGen *gen, IrInstrRef phi) {
   int phi_users_count = 0;
 
   IrInstrRef same = 0, ref;
-  vector_foreach(gen->upsilons, ref) {
+  vector_foreach(ref, gen->upsilons) {
     IrInstr instr = gen->code[ref];
     if (instr.arg1 == phi) {
       // this is an upsilon which writes the shadow variable for this phi (so it is in effect a phi operand)
@@ -451,82 +482,70 @@ static IrInstr create_pred_upsilons(IrGen *gen, IrBlockRef block, IrInstr phi) {
   IrInstr values[32];
   int num_values = 0;
 
-  IrInstr same = (IrInstr) { };
+  bool found_different = false;
+  IrInstr candidate = (IrInstr) { };
   IrVarRef var = phi.arg1;
   BasicBlock *b = get_block(gen, block);
-  for (ListEntry *e = &b->preds; ; e = gen->list_entries + e->next) {
-    for (int i = 0; i < 3; ++i) {
-      IrBlockRef pred = e->values[i];
-      if (!pred) goto end;
-      IrInstr val = irgen_read_variable(gen, pred, var);
-      assert(num_values < 32);
-      preds[num_values] = pred;
-      values[num_values++] = val;
-      if (!same.u64_repr && val.u64_repr != phi.u64_repr) {
-        same = val;
-      } 
-    }
-    if (!e->next) break;
-  }
-end:
 
-  if (same.u64_repr) {
-    bool all_equal = true;
-    for (int i = 0; i < num_values; ++i) {
-      if (values[i].u64_repr != same.u64_repr && values[i].u64_repr != phi.u64_repr) {
-        all_equal = false;
-        break;
+  IrBlockRef pred;
+  list_foreach(pred, b->preds, gen->list_entries) {
+    IrInstr val = irgen_read_variable(gen, pred, var);
+    
+    assert(num_values < 32);
+    preds[num_values] = pred;
+    values[num_values++] = val;
+
+    if (val.u64_repr != phi.u64_repr) {
+      if (!candidate.u64_repr) {
+        candidate = val;
+      } else if (val.u64_repr != candidate.u64_repr) {
+        found_different = true;
       }
     }
-    if (all_equal) {
-      return same;
-    }
   }
 
+  if (candidate.u64_repr && !found_different) {
+    return candidate;
+  }
+
+  assert(num_values > 1);
   for (int i = 0; i < num_values; ++i) {
     irgen_upsilon(gen, preds[i], values[i], phi);
   }
-
   return phi;
   //return try_remove_trivial_phi(gen, phi);
 }
 
 void irgen_seal_block(IrGen *gen, IrBlockRef block) {
   BasicBlock *b = get_block(gen, block);
-  assert(!b->is_sealed);
-  for (ListEntry *e = &b->incomplete_phis; ; e = gen->list_entries + e->next) {
-    for (int i = 0; i < 3; ++i) {
-      IrInstrRef phi = e->values[i];
-      if (!phi) goto end;
-      create_pred_upsilons(gen, block, gen->code[phi]);
-    }
-    if (!e->next) break;
+  assert(!b->sealed);
+  b->sealed = true;
+  IrInstrRef phi;
+  list_foreach(phi, b->incomplete_phis, gen->list_entries) {
+    create_pred_upsilons(gen, block, gen->code[phi]);
   }
-
-end:
-  b->is_sealed = true;
 }
 
 
 
 
-static IrInstrRef fixup_instr(IrGen *gen, IrGen *source, i16 *map, IrInstrRef source_id) {
-  if (map[source_id]) {
-    return map[source_id];
+static IrInstrRef fixup_instr(IrGen *gen, IrGen *source, i16 *map, IrInstrRef sourceref) {
+  if (map[sourceref]) {
+    return map[sourceref];
   }
 
 #define FIXUP(Id) gen->code[fixup_instr(gen, source, map, Id)]
 #define FIXUP_BINOP(EmitFunc) intern_instr(gen, EmitFunc(gen, FIXUP(instr.arg0), FIXUP(instr.arg1)))
 
   IrInstrRef dest_id = 0;
-  IrInstr instr = source->code[source_id];
+  IrInstr instr = source->code[sourceref];
   switch (instr.tag) {
     case IR_NOP: return 0;
     case IR_IDENTITY: dest_id = fixup_instr(gen, source, map, instr.arg0); break;
     case IR_LABEL: irgen_label(gen, instr.arg0); return 0;
-    case IR_JUMP: irgen_jump(gen, gen->curr_block, instr.arg0); return 0;
-    case IR_BRANCH: irgen_branch(gen, gen->curr_block, FIXUP(instr.arg0), instr.arg1, instr.arg2); return 0;
-    case IR_RET: irgen_ret(gen, gen->curr_block, FIXUP(instr.arg0)); return 0;
+    case IR_JUMP: irgen_jump(gen, instr.arg0); return 0;
+    case IR_BRANCH: irgen_branch(gen, FIXUP(instr.arg0), instr.arg1, instr.arg2); return 0;
+    case IR_RET: irgen_ret(gen, FIXUP(instr.arg0)); return 0;
     case IR_UPSILON: irgen_upsilon(gen, gen->curr_block, FIXUP(instr.arg0), FIXUP(instr.arg1)); return 0;
     case IR_CONST: dest_id = intern_instr(gen, instr); break;
     case IR_PHI: dest_id = intern_instr(gen, instr); break;
@@ -536,48 +555,76 @@ static IrInstrRef fixup_instr(IrGen *gen, IrGen *source, i16 *map, IrInstrRef so
     default: assert(0 && "unknown instruction");
   }
 
-  map[source_id] = dest_id;
+  map[sourceref] = dest_id;
   return dest_id;
 }
 
 static void fixup_block(IrGen *gen, IrGen *source, i16 *map, IrBlockRef block) {
   BasicBlock *b = get_block(source, block);
-  if (b->is_visited) {
+  if (b->visited) {
     return;
   }
-  b->is_visited = true;
-  assert(b->is_sealed);
-  assert(b->is_filled);
+  b->visited = true;
+  assert(b->first);
+  assert(b->last);
+  assert(b->sealed);
 
-  IrInstrRef source_id = b->start;
-  while (!IR_IS_TERMINAL_INSTR(source->code[source_id].tag)) {
-    assert(source_id < source->maxpos);
-    fixup_instr(gen, source, map, source_id++);
+  // fixup all non-terminal instructions in the block
+  IrInstrRef sourceref = b->first;
+  while (!IR_IS_TERMINAL_INSTR(source->code[sourceref].tag)) {
+    assert(sourceref < source->maxpos);
+    fixup_instr(gen, source, map, sourceref++);
   }
 
-  for (ListEntry *e = &b->suffix; ; e = source->list_entries + e->next) {
-    for (int i = 0; i < 3; ++i) {
-      IrInstrRef ref = e->values[i];
-      if (!ref) goto suffix_done;
-      fixup_instr(gen, source, map, ref);
+  // then fixup and append the suffix instructions
+  IrInstrRef ref;
+  list_foreach(ref, b->suffix, source->list_entries) {
+    fixup_instr(gen, source, map, ref);
+  }
+
+  // then handle the terminal instruction
+  IrInstr term = source->code[sourceref];
+  switch (term.tag) {
+    case IR_JUMP: {
+      IrBlockRef succ = skip_trivial_successors(source, term.arg0); // skip through blocks that only jump
+      IrInstrRef trivial_exit = get_trivial_exit(source, succ);
+      if (trivial_exit) {
+        // if the jump target just immediately exist, just exit here instead of jumping
+        fixup_instr(gen, source, map, trivial_exit);
+      } else {
+        irgen_jump(gen, succ);
+        fixup_block(gen, source, map, succ);
+      }
+      break;
     }
-    if (!e->next) break;
-  }
-suffix_done:
-
-  fixup_instr(gen, source, map, source_id); // terminal instruction
-
-  for (int i = 0; i < 2; ++i) {
-    if (b->succs[i]) {
-      fixup_block(gen, source, map, b->succs[i]);
+    case IR_BRANCH: {
+      IrBlockRef true_succ = skip_trivial_successors(source, term.arg1);
+      IrBlockRef false_succ = skip_trivial_successors(source, term.arg2);
+      IrInstrRef true_exit = get_trivial_exit(source, true_succ);
+      IrInstrRef false_exit = get_trivial_exit(source, false_succ);
+      if (true_exit && false_exit && source->code[true_exit].u64_repr == source->code[false_exit].u64_repr) {
+        // if the two branch blocks just immediately exit the same way, just exit here instead of branching
+        fixup_instr(gen, source, map, true_exit);
+      } else {
+        irgen_branch(gen, gen->code[fixup_instr(gen, source, map, term.arg0)], true_succ, false_succ);
+        fixup_block(gen, source, map, true_succ);
+        fixup_block(gen, source, map, false_succ);
+      }
+      break;
     }
+    default:
+      fixup_instr(gen, source, map, sourceref);
+      break;
   }
+
+  get_block(gen, block)->sealed = true;
 }
 
 void irgen_fixup_ir(IrGen *gen, IrGen *source) {
   i16 map_buffer[65536] = { 0, };
   i16 *map = map_buffer + 32768; // map from old to new IrInstrRef
-  gen->phi_count = gen->phi_count;
+  irgen_clear(gen);
+  gen->phi_count = source->phi_count;
   fixup_block(gen, source, map, 1);
 }
 

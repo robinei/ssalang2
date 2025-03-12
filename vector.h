@@ -49,7 +49,7 @@
         } \
     } while (0)
 
-#define vector_foreach(V, X) \
+#define vector_foreach(X, V) \
     for (int __index = 0, __max_index = vector_size(V); \
          __index < __max_index && ((X) = (V)[__index], 1); \
          ++__index)

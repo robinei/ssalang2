@@ -19,9 +19,9 @@ IrInstr irgen_read_variable(IrGen *gen, IrBlockRef block, IrVarRef var);
 void irgen_label(IrGen *gen, IrBlockRef block);
 
 // terminals (all blocks must end with exactly one of these)
-void irgen_jump(IrGen *gen, IrBlockRef block, IrBlockRef target);
-void irgen_branch(IrGen *gen, IrBlockRef block, IrInstr cond, IrBlockRef true_target, IrBlockRef false_target);
-void irgen_ret(IrGen *gen, IrBlockRef block, IrInstr retval);
+void irgen_jump(IrGen *gen, IrBlockRef target);
+void irgen_branch(IrGen *gen, IrInstr cond, IrBlockRef true_target, IrBlockRef false_target);
+void irgen_ret(IrGen *gen, IrInstr retval);
 
 void irgen_upsilon(IrGen *gen, IrBlockRef block, IrInstr val, IrInstr phi);
 
