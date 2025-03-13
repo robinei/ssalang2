@@ -75,11 +75,19 @@ IrInstr ast_compile(AstNodeRef noderef, bool static_eval, CompileContext *ctx) {
         break;
       }
 
-      case AST_TAG_BINOP_EQUALS: {
+      case AST_TAG_BINOP_EQ: {
         AstBinopNode *node = (AstBinopNode *)basenode;
         IrInstr left = ast_compile(node->left_node, static_eval, ctx);
         IrInstr right = ast_compile(node->right_node, static_eval, ctx);
         result = irgen_eq(gen, left, right);
+        break;
+      }
+
+      case AST_TAG_BINOP_NEQ: {
+        AstBinopNode *node = (AstBinopNode *)basenode;
+        IrInstr left = ast_compile(node->left_node, static_eval, ctx);
+        IrInstr right = ast_compile(node->right_node, static_eval, ctx);
+        result = irgen_neq(gen, left, right);
         break;
       }
 

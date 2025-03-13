@@ -2,6 +2,8 @@
 
 #include "ir.h"
 
+typedef i32 IrVarRef;
+
 typedef struct IrGen IrGen;
 
 IrGen *irgen_create(void);
@@ -28,10 +30,11 @@ void irgen_upsilon(IrGen *gen, IrBlockRef block, IrInstr val, IrInstr phi);
 // pure instruction contructors (just pure computation and data dependencies, no side effects)
 IrInstr irgen_const_bool(IrGen *gen, bool val);
 IrInstr irgen_const_i32(IrGen *gen, i32 val);
-IrInstr irgen_add(IrGen *gen, IrInstr arg1, IrInstr arg2);
 IrInstr irgen_phi(IrGen *gen, IrType type);
 IrInstr irgen_arg(IrGen *gen, u32 arg, IrType type);
-IrInstr irgen_eq(IrGen *gen, IrInstr arg1, IrInstr arg2);
+IrInstr irgen_add(IrGen *gen, IrInstr lhs, IrInstr rhs);
+IrInstr irgen_eq(IrGen *gen, IrInstr lhs, IrInstr rhs);
+IrInstr irgen_neq(IrGen *gen, IrInstr lhs, IrInstr rhs);
 
 void irgen_print_ir(IrGen *gen);
 void irgen_fixup_ir(IrGen *gen, IrGen *source);

@@ -105,7 +105,7 @@ static void print_instr(IrGen *gen, IrInstrRef ref, IrInstr instr) {
     case IR_JUMP: printf("  JUMP :%d\n", instr.arg0); break;
     case IR_BRANCH: printf("  BRANCH %d :%d :%d\n", instr.arg0, instr.arg1, instr.arg2); break;
     case IR_RET: printf("  RET %d\n", instr.arg0); break;
-    case IR_UPSILON: printf("  UPSILON %d %d\n", instr.arg0, instr.arg1); break;
+    case IR_UPSILON: printf("  UPSILON %d [%d]\n", instr.arg0, instr.arg1); break;
     case IR_CONST:
       switch (instr.type) {
         case TY_VOID: printf("  %d = CONST void\n", ref); break;
@@ -118,6 +118,7 @@ static void print_instr(IrGen *gen, IrInstrRef ref, IrInstr instr) {
     case IR_ARG: printf("  %d = ARG #%d\n", ref, instr.arg0); break;
     case IR_ADD: printf("  %d = ADD %d %d\n", ref, instr.arg0, instr.arg1); break;
     case IR_EQ: printf("  %d = EQ %d %d\n", ref, instr.arg0, instr.arg1); break;
+    case IR_NEQ: printf("  %d = NEQ %d %d\n", ref, instr.arg0, instr.arg1); break;
     default: assert(0); break;
   }
 }
@@ -149,7 +150,7 @@ static BasicBlock *get_block(IrGen *gen, IrBlockRef block) {
 
 static IrBlockRef skip_trivial_successors(IrGen *gen, IrBlockRef succ) {
   BasicBlock *b = get_block(gen, succ);
-  if (b->last == b->first + 1 && b->succs[0] && !b->succs[1]) {
+  if (b->last == b->first + 1 && !b->suffix.values[0] && b->succs[0] && !b->succs[1]) {
     // block has only a single jump instruction
     assert(gen->code[b->last].tag == IR_JUMP);
     return skip_trivial_successors(gen, b->succs[0]);
@@ -159,7 +160,7 @@ static IrBlockRef skip_trivial_successors(IrGen *gen, IrBlockRef succ) {
 
 static IrInstrRef get_trivial_exit(IrGen *gen, IrBlockRef block) {
   BasicBlock *s = get_block(gen, block);
-  if (s->last == s->first + 1) {
+  if (s->last == s->first + 1 && !s->suffix.values[0]) {
     if (gen->code[s->last].tag == IR_RET) {
       return s->last;
     }
@@ -232,10 +233,16 @@ static IrInstrRef emit_instr_pinned(IrGen *gen, IrInstr instr) {
   return ref;
 }
 
+static IrInstrRef try_lookup_instr(IrGen *gen, IrInstr instr) {
+  u32 cached = 0;
+  u64_to_u32_get(&gen->ircache, instr.u64_repr, &cached);
+  return cached;
+}
+
 static IrInstrRef emit_instr_unpinned(IrGen *gen, IrInstr instr) {
   if (IR_IS_PURE_INSTR(instr.tag)) {
-    u32 cached;
-    if (u64_to_u32_get(&gen->ircache, instr.u64_repr, &cached)) {
+    u32 cached = try_lookup_instr(gen, instr);
+    if (cached) {
       return cached;
     }
   }
@@ -259,7 +266,7 @@ static IrInstrRef emit_instr_unpinned(IrGen *gen, IrInstr instr) {
 }
 
 static IrInstrRef append_block_instr(IrGen *gen, IrBlockRef block, IrInstr instr) {
-  if (block == gen->curr_block) {
+  if (block == gen->curr_block && !get_block(gen, block)->last) {
     assert(!IR_IS_PURE_INSTR(instr.tag));
     return emit_instr_pinned(gen, instr);
   }
@@ -291,6 +298,7 @@ static IrInstrRef intern_instr(IrGen *gen, IrInstr instr) {
 
 
 void irgen_label(IrGen *gen, IrBlockRef block) {
+  printf("label %d\n", block);
   assert(!gen->curr_block || get_block(gen, gen->curr_block)->last);
   BasicBlock *b = get_block(gen, block);
   assert(!b->first);
@@ -372,109 +380,42 @@ IrInstr irgen_arg(IrGen *gen, u32 arg, IrType type) {
   return (IrInstr) { .tag = IR_ARG, .type = type, .arg0 = arg };
 }
 
-IrInstr irgen_add(IrGen *gen, IrInstr arg0, IrInstr arg1) {
-  assert(arg0.type == arg1.type);
-  if (arg0.tag == IR_CONST && arg1.tag == IR_CONST) {
-    switch (arg0.type) {
-      case TY_I32: return (IrInstr) { .tag = IR_CONST, .type = arg0.type, .i32_const = arg0.i32_const + arg1.i32_const };
+IrInstr irgen_add(IrGen *gen, IrInstr lhs, IrInstr rhs) {
+  assert(lhs.type == rhs.type);
+  if (lhs.tag == IR_CONST && rhs.tag == IR_CONST) {
+    switch (lhs.type) {
+      case TY_I32: return (IrInstr) { .tag = IR_CONST, .type = lhs.type, .i32_const = lhs.i32_const + rhs.i32_const };
       default: assert(0 && "unexpected type");
     }
   }
-  return (IrInstr) { .tag = IR_ADD, .type = arg0.type, .arg0 = intern_instr(gen, arg0), .arg1 = intern_instr(gen, arg1) };
+  return (IrInstr) { .tag = IR_ADD, .type = lhs.type, .arg0 = intern_instr(gen, lhs), .arg1 = intern_instr(gen, rhs) };
 }
 
-IrInstr irgen_eq(IrGen *gen, IrInstr arg0, IrInstr arg1) {
-  assert(arg0.type == arg1.type);
-  if (arg0.tag == IR_CONST && arg1.tag == IR_CONST) {
-    switch (arg0.type) {
-      case TY_BOOL: return (IrInstr) { .tag = IR_CONST, .type = TY_BOOL, .bool_const = arg0.bool_const == arg1.bool_const };
-      case TY_I32: return (IrInstr) { .tag = IR_CONST, .type = TY_BOOL, .bool_const = arg0.i32_const == arg1.i32_const };
+IrInstr irgen_eq(IrGen *gen, IrInstr lhs, IrInstr rhs) {
+  assert(lhs.type == rhs.type);
+  if (lhs.tag == IR_CONST && rhs.tag == IR_CONST) {
+    switch (lhs.type) {
+      case TY_BOOL: return (IrInstr) { .tag = IR_CONST, .type = TY_BOOL, .bool_const = lhs.bool_const == rhs.bool_const };
+      case TY_I32: return (IrInstr) { .tag = IR_CONST, .type = TY_BOOL, .bool_const = lhs.i32_const == rhs.i32_const };
       default: assert(0 && "unexpected type");
     }
   }
-  return (IrInstr) { .tag = IR_EQ, .type = TY_BOOL, .arg0 = intern_instr(gen, arg0), .arg1 = intern_instr(gen, arg1) };
+  return (IrInstr) { .tag = IR_EQ, .type = TY_BOOL, .arg0 = intern_instr(gen, lhs), .arg1 = intern_instr(gen, rhs) };
 }
 
-
-
-
-
-typedef union {
-  struct { i16 block, var; };
-  i32 u32_repr;
-} BindingKey;
-
-static IrInstr create_pred_upsilons(IrGen *gen, IrBlockRef block, IrInstr phi);
-
-void irgen_write_variable(IrGen *gen, IrBlockRef block, IrVarRef var, IrInstr val) {
-  printf("block %d WRITE: ", block); print_instr(gen, var, val);
-  assert(val.type != TY_VOID);
-  BindingKey key = {{ block, var }};
-  u32_to_u64_put(&gen->bindings, key.u32_repr, val.u64_repr);
-}
-
-IrInstr irgen_read_variable(IrGen *gen, IrBlockRef block, IrVarRef var) {
-  BindingKey key = {{ block, var }};
-  IrInstr found;
-  if (u32_to_u64_get(&gen->bindings, key.u32_repr, &found.u64_repr)) {
-    printf("block %d READ: ", block); print_instr(gen, var, found);
-    return found;
-  }
-
-  IrInstr result;
-  BasicBlock *b = get_block(gen, block);
-  if (!b->sealed) {
-    IrInstr phi = irgen_phi(gen, gen->vars[var].type);
-    phi.arg1 = var;
-    list_push(intern_instr(gen, phi), &b->incomplete_phis, &gen->list_entries);
-    result = phi;
-  } else if (b->preds.values[0] && !b->preds.values[1]) {
-    // exactly one predecessor
-    result = irgen_read_variable(gen, b->preds.values[0], var);
-  } else {
-    IrInstr phi = irgen_phi(gen, gen->vars[var].type);
-    phi.arg1 = var;
-    irgen_write_variable(gen, block, var, phi);
-    result = create_pred_upsilons(gen, block, phi);
-  }
-
-  irgen_write_variable(gen, block, var, result);
-  printf("block %d READ: ", block); print_instr(gen, var, result);
-  return result;
-}
-
-static IrInstrRef try_remove_trivial_phi(IrGen *gen, IrInstrRef phi) {
-  IrInstrRef phi_users[128];
-  int phi_users_count = 0;
-
-  IrInstrRef same = 0, ref;
-  vector_foreach(ref, gen->upsilons) {
-    IrInstr instr = gen->code[ref];
-    if (instr.arg1 == phi) {
-      // this is an upsilon which writes the shadow variable for this phi (so it is in effect a phi operand)
-      IrInstrRef op = instr.arg0;
-      if (op == same || op == phi) {
-        continue;
-      }
-      if (same) {
-        return phi;
-      }
-      same = op;
-    } else if (instr.arg0 == phi) {
-      // this upsilon defines an operand to a different phi, but the value written is this phi.
-      // record this phi user, so we can try to recursively remove trivial phis.
-      assert(phi_users_count < 128);
-      phi_users[phi_users_count++] = instr.arg1;
+IrInstr irgen_neq(IrGen *gen, IrInstr lhs, IrInstr rhs) {
+  assert(lhs.type == rhs.type);
+  if (lhs.tag == IR_CONST && rhs.tag == IR_CONST) {
+    switch (lhs.type) {
+      case TY_BOOL: return (IrInstr) { .tag = IR_CONST, .type = TY_BOOL, .bool_const = lhs.bool_const != rhs.bool_const };
+      case TY_I32: return (IrInstr) { .tag = IR_CONST, .type = TY_BOOL, .bool_const = lhs.i32_const != rhs.i32_const };
+      default: assert(0 && "unexpected type");
     }
   }
-
-  // the phi was trivial. replace with the referenced value
-  gen->code[phi] = (IrInstr) { .tag = IR_IDENTITY, .arg0 = same };
-
-  for (int i = 0; i < phi_users_count; ++i) {
-    try_remove_trivial_phi(gen, phi_users[i]);
-  }
+  return (IrInstr) { .tag = IR_NEQ, .type = TY_BOOL, .arg0 = intern_instr(gen, lhs), .arg1 = intern_instr(gen, rhs) };
 }
+
+
 
 
 static IrInstr create_pred_upsilons(IrGen *gen, IrBlockRef block, IrInstr phi) {
@@ -504,19 +445,23 @@ static IrInstr create_pred_upsilons(IrGen *gen, IrBlockRef block, IrInstr phi) {
     }
   }
 
+  assert(num_values > 1);
   if (candidate.u64_repr && !found_different) {
+    IrInstrRef phiref = try_lookup_instr(gen, phi);
+    if (phiref) {
+      gen->code[phiref] = (IrInstr) { .tag = IR_IDENTITY, .type = candidate.type, .arg0 = intern_instr(gen, candidate) };
+    }
     return candidate;
   }
 
-  assert(num_values > 1);
   for (int i = 0; i < num_values; ++i) {
     irgen_upsilon(gen, preds[i], values[i], phi);
   }
   return phi;
-  //return try_remove_trivial_phi(gen, phi);
 }
 
 void irgen_seal_block(IrGen *gen, IrBlockRef block) {
+  printf("sealing %d\n", block);
   BasicBlock *b = get_block(gen, block);
   assert(!b->sealed);
   b->sealed = true;
@@ -524,6 +469,49 @@ void irgen_seal_block(IrGen *gen, IrBlockRef block) {
   list_foreach(phi, b->incomplete_phis, gen->list_entries) {
     create_pred_upsilons(gen, block, gen->code[phi]);
   }
+}
+
+typedef union {
+  struct { i16 block, var; };
+  i32 u32_repr;
+} BindingKey;
+
+void irgen_write_variable(IrGen *gen, IrBlockRef block, IrVarRef var, IrInstr val) {
+  BasicBlock *b = get_block(gen, block);
+  printf("block %d (%s) WRITE: ", block, b->sealed ? "sealed" : "unsealed"); print_instr(gen, var, val);
+  assert(val.type != TY_VOID);
+  BindingKey key = {{ block, var }};
+  u32_to_u64_put(&gen->bindings, key.u32_repr, val.u64_repr);
+}
+
+IrInstr irgen_read_variable(IrGen *gen, IrBlockRef block, IrVarRef var) {
+  BindingKey key = {{ block, var }};
+  BasicBlock *b = get_block(gen, block);
+  IrInstr found;
+  if (u32_to_u64_get(&gen->bindings, key.u32_repr, &found.u64_repr)) {
+    printf("block %d (%s) READ: ", block, b->sealed ? "sealed" : "unsealed"); print_instr(gen, var, found);
+    return found;
+  }
+
+  IrInstr result;
+  if (!b->sealed) {
+    IrInstr phi = irgen_phi(gen, gen->vars[var].type);
+    phi.arg1 = var;
+    list_push(intern_instr(gen, phi), &b->incomplete_phis, &gen->list_entries);
+    result = phi;
+  } else if (b->preds.values[0] && !b->preds.values[1]) {
+    // exactly one predecessor
+    result = irgen_read_variable(gen, b->preds.values[0], var);
+  } else {
+    IrInstr phi = irgen_phi(gen, gen->vars[var].type);
+    phi.arg1 = var;
+    irgen_write_variable(gen, block, var, phi);
+    result = create_pred_upsilons(gen, block, phi);
+  }
+
+  irgen_write_variable(gen, block, var, result);
+  printf("block %d (%s) READ: ", block, b->sealed ? "sealed" : "unsealed"); print_instr(gen, var, result);
+  return result;
 }
 
 
@@ -552,6 +540,7 @@ static IrInstrRef fixup_instr(IrGen *gen, IrGen *source, i16 *map, IrInstrRef so
     case IR_ARG: dest_id = intern_instr(gen, instr); break;
     case IR_ADD: dest_id = FIXUP_BINOP(irgen_add); break;
     case IR_EQ: dest_id = FIXUP_BINOP(irgen_eq); break;
+    case IR_NEQ: dest_id = FIXUP_BINOP(irgen_neq); break;
     default: assert(0 && "unknown instruction");
   }
 
