@@ -80,14 +80,18 @@ typedef struct BasicBlock {
   ListEntry suffix;
 } BasicBlock;
 
+typedef struct Phi {
+  ListEntry upsilons;
+} Phi;
+
 struct IrGen {
   IrInstr *code;
   i32 numneg, maxneg, numpos, maxpos;
 
-  i32 phi_count;
   IrBlockRef curr_block;
   Vector(BasicBlock) blocks;
   Vector(Variable) vars;
+  Vector(Phi) phis;
   Vector(ListEntry) list_entries;
   Vector(IrInstrRef) upsilons;
   u32_to_u64 bindings;
@@ -105,7 +109,7 @@ static void print_instr(IrGen *gen, IrInstrRef ref, IrInstr instr) {
     case IR_JUMP: printf("  JUMP :%d\n", instr.arg0); break;
     case IR_BRANCH: printf("  BRANCH %d :%d :%d\n", instr.arg0, instr.arg1, instr.arg2); break;
     case IR_RET: printf("  RET %d\n", instr.arg0); break;
-    case IR_UPSILON: printf("  UPSILON %d [%d]\n", instr.arg0, instr.arg1); break;
+    case IR_UPSILON: printf("  UPSILON [%d] %d\n", instr.arg0, instr.arg1); break;
     case IR_CONST:
       switch (instr.type) {
         case TY_VOID: printf("  %d = CONST void\n", ref); break;
@@ -114,7 +118,7 @@ static void print_instr(IrGen *gen, IrInstrRef ref, IrInstr instr) {
         default: assert(0); break;
       }
       break;
-    case IR_PHI: printf("  %d = PHI #%d\n", ref, instr.arg0); break;
+    case IR_PHI: printf("  %d = PHI [%d]\n", ref, instr.arg0); break;
     case IR_ARG: printf("  %d = ARG #%d\n", ref, instr.arg0); break;
     case IR_ADD: printf("  %d = ADD %d %d\n", ref, instr.arg0, instr.arg1); break;
     case IR_EQ: printf("  %d = EQ %d %d\n", ref, instr.arg0, instr.arg1); break;
@@ -168,6 +172,21 @@ static IrInstrRef get_trivial_exit(IrGen *gen, IrBlockRef block) {
   return 0;
 }
 
+IrPhiRef irgen_create_phi(IrGen *gen) {
+  i32 phi = vector_size(gen->phis);
+  assert(phi < INT16_MAX);
+  vector_push(gen->phis, (Phi) { });
+  return phi;
+}
+
+static Phi *get_phi(IrGen *gen, IrPhiRef phi) {
+  assert(phi);
+  while (vector_size(gen->phis) <= phi) {
+    irgen_create_phi(gen);
+  }
+  return gen->phis + phi;
+}
+
 
 
 
@@ -180,12 +199,14 @@ IrGen *irgen_create(void) {
   gen->numneg = 0;
   irgen_create_block(gen); // block at index 0 should not be used
   irgen_create_variable(gen, TY_VOID); // var at index 0 should not be used
+  irgen_create_phi(gen); // phi at index 0 should not be used
   return gen;
 }
 
 void irgen_destroy(IrGen *gen) {
   vector_free(gen->blocks);
   vector_free(gen->vars);
+  vector_free(gen->phis);
   vector_free(gen->list_entries);
   vector_free(gen->upsilons);
   u32_to_u64_cleanup(&gen->bindings);
@@ -197,16 +218,17 @@ void irgen_clear(IrGen *gen) {
   gen->code[0] = (IrInstr) { }; // let instr at index 0 be NOP
   gen->numpos = 1; // reserve NOP slot
   gen->numneg = 0;
-  gen->phi_count = 0;
   gen->curr_block = 0;
   vector_clear(gen->blocks);
   vector_clear(gen->vars);
+  vector_clear(gen->phis);
   vector_clear(gen->list_entries);
   vector_clear(gen->upsilons);
   u32_to_u64_clear(&gen->bindings);
   u64_to_u32_clear(&gen->ircache);
   irgen_create_block(gen); // block at index 0 should not be used
   irgen_create_variable(gen, TY_VOID); // var at index 0 should not be used
+  irgen_create_phi(gen); // phi at index 0 should not be used
 }
 
 IrVarRef irgen_create_variable(IrGen *gen, IrType type) {
@@ -353,11 +375,13 @@ void irgen_ret(IrGen *gen, IrInstr retval) {
   b->last = emit_instr_pinned(gen, instr);
 }
 
-void irgen_upsilon(IrGen *gen, IrBlockRef block, IrInstr val, IrInstr phi) {
+void irgen_upsilon(IrGen *gen, IrBlockRef block, IrPhiRef phi, IrInstr val) {
   // upsilons may be emitted even after a block is filled (recursive variable lookup will create upsilons in predecessor blocks as needed)
-  if (phi.type != TY_VOID) {
-    IrInstrRef ref = append_block_instr(gen, block, (IrInstr) { .tag = IR_UPSILON, .arg0 = intern_instr(gen, val), .arg1 = intern_instr(gen, phi) });
+  if (phi) {
+    IrInstrRef ref = append_block_instr(gen, block, (IrInstr) { .tag = IR_UPSILON, .arg0 = phi, .arg1 = intern_instr(gen, val) });
     vector_push(gen->upsilons, ref);
+    Phi *p = get_phi(gen, phi);
+    list_push(ref, &p->upsilons, &gen->list_entries);
   }
 }
 
@@ -369,9 +393,15 @@ IrInstr irgen_const_i32(IrGen *gen, i32 val) {
   return (IrInstr) { .tag = IR_CONST, .type = TY_I32, .i32_const = val };
 }
 
-IrInstr irgen_phi(IrGen *gen, IrType type) {
-  assert(type != TY_VOID);
-  return (IrInstr) { .tag = IR_PHI, .type = type, .arg0 = ++gen->phi_count };
+IrInstr irgen_phi(IrGen *gen, IrPhiRef phi, IrType type, IrVarRef var) {
+  if (phi) {
+    assert(type != TY_VOID);
+    IrInstrRef ref = emit_instr_pinned(gen, (IrInstr) { .tag = IR_PHI, .type = type, .arg0 = phi, .arg1 = var });
+    return (IrInstr) { .tag = IR_IDENTITY, .type = type, .arg0 = ref };
+  } else {
+    assert(type == TY_VOID);
+    return (IrInstr) { };
+  }
 }
 
 IrInstr irgen_arg(IrGen *gen, u32 arg, IrType type) {
@@ -455,7 +485,7 @@ static IrInstr create_pred_upsilons(IrGen *gen, IrBlockRef block, IrInstr phi) {
   }
 
   for (int i = 0; i < num_values; ++i) {
-    irgen_upsilon(gen, preds[i], values[i], phi);
+    irgen_upsilon(gen, preds[i], phi.arg0, values[i]);
   }
   return phi;
 }
@@ -477,6 +507,8 @@ typedef union {
 } BindingKey;
 
 void irgen_write_variable(IrGen *gen, IrBlockRef block, IrVarRef var, IrInstr val) {
+  assert(block);
+  assert(var);
   BasicBlock *b = get_block(gen, block);
   printf("block %d (%s) WRITE: ", block, b->sealed ? "sealed" : "unsealed"); print_instr(gen, var, val);
   assert(val.type != TY_VOID);
@@ -485,6 +517,8 @@ void irgen_write_variable(IrGen *gen, IrBlockRef block, IrVarRef var, IrInstr va
 }
 
 IrInstr irgen_read_variable(IrGen *gen, IrBlockRef block, IrVarRef var) {
+  assert(block);
+  assert(var);
   BindingKey key = {{ block, var }};
   BasicBlock *b = get_block(gen, block);
   IrInstr found;
@@ -495,16 +529,14 @@ IrInstr irgen_read_variable(IrGen *gen, IrBlockRef block, IrVarRef var) {
 
   IrInstr result;
   if (!b->sealed) {
-    IrInstr phi = irgen_phi(gen, gen->vars[var].type);
-    phi.arg1 = var;
+    IrInstr phi = irgen_phi(gen, irgen_create_phi(gen), gen->vars[var].type, var);
     list_push(intern_instr(gen, phi), &b->incomplete_phis, &gen->list_entries);
     result = phi;
   } else if (b->preds.values[0] && !b->preds.values[1]) {
     // exactly one predecessor
     result = irgen_read_variable(gen, b->preds.values[0], var);
   } else {
-    IrInstr phi = irgen_phi(gen, gen->vars[var].type);
-    phi.arg1 = var;
+    IrInstr phi = irgen_phi(gen, irgen_create_phi(gen), gen->vars[var].type, var);
     irgen_write_variable(gen, block, var, phi);
     result = create_pred_upsilons(gen, block, phi);
   }
@@ -522,7 +554,7 @@ static IrInstrRef fixup_instr(IrGen *gen, IrGen *source, i16 *map, IrInstrRef so
     return map[sourceref];
   }
 
-#define FIXUP(Id) gen->code[fixup_instr(gen, source, map, Id)]
+#define FIXUP(Id) to_instr(gen, fixup_instr(gen, source, map, Id))
 #define FIXUP_BINOP(EmitFunc) intern_instr(gen, EmitFunc(gen, FIXUP(instr.arg0), FIXUP(instr.arg1)))
 
   IrInstrRef dest_id = 0;
@@ -534,9 +566,9 @@ static IrInstrRef fixup_instr(IrGen *gen, IrGen *source, i16 *map, IrInstrRef so
     case IR_JUMP: irgen_jump(gen, instr.arg0); return 0;
     case IR_BRANCH: irgen_branch(gen, FIXUP(instr.arg0), instr.arg1, instr.arg2); return 0;
     case IR_RET: irgen_ret(gen, FIXUP(instr.arg0)); return 0;
-    case IR_UPSILON: irgen_upsilon(gen, gen->curr_block, FIXUP(instr.arg0), FIXUP(instr.arg1)); return 0;
+    case IR_UPSILON: irgen_upsilon(gen, gen->curr_block, instr.arg0, FIXUP(instr.arg1)); return 0;
     case IR_CONST: dest_id = intern_instr(gen, instr); break;
-    case IR_PHI: dest_id = intern_instr(gen, instr); break;
+    case IR_PHI: dest_id = irgen_phi(gen, instr.arg0, instr.type, instr.arg1).arg0; break;
     case IR_ARG: dest_id = intern_instr(gen, instr); break;
     case IR_ADD: dest_id = FIXUP_BINOP(irgen_add); break;
     case IR_EQ: dest_id = FIXUP_BINOP(irgen_eq); break;
@@ -613,7 +645,6 @@ void irgen_fixup_ir(IrGen *gen, IrGen *source) {
   i16 map_buffer[65536] = { 0, };
   i16 *map = map_buffer + 32768; // map from old to new IrInstrRef
   irgen_clear(gen);
-  gen->phi_count = source->phi_count;
   fixup_block(gen, source, map, 1);
 }
 

@@ -6,6 +6,8 @@ typedef i16 IrOperand;
 
 typedef IrOperand IrInstrRef; // signed, so that pure instructions can have negative index (that way we don't commit to any sequencing of them early)
 typedef IrOperand IrBlockRef;
+typedef IrOperand IrPhiRef;
+typedef IrOperand IrVarRef;
 
 typedef enum IrType {
   TY_VOID,
@@ -25,11 +27,11 @@ typedef enum IrInstrTag {
   IR_BRANCH, // (IrInstrRef cond, IrBlockRef true_target, IrBlockRef false_target)
   IR_RET, // (IrInstrRef value)
 
-  IR_UPSILON, // (IrInstrRef value, IrInstrRef phi)
+  IR_UPSILON, // (IrPhiRef phi, IrInstrRef value)
+  IR_PHI, // (IrPhiRef phi[, IrVarRef var])
 
   // all after this point must be pure
   IR_CONST,
-  IR_PHI, // (IrOperand unique_phi_id)
   IR_ARG, // (IrOperand argument_index)
   IR_ADD, // (IrInstrRef lhs, IrInstrRef rhs)
   IR_EQ, // (IrInstrRef lhs, IrInstrRef rhs)

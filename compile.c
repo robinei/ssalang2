@@ -168,8 +168,8 @@ IrInstr ast_compile(AstNodeRef noderef, bool static_eval, CompileContext *ctx) {
           irgen_label(gen, then_block);
           ctx->block = then_block;
           IrInstr then_result = ast_compile(node->then, static_eval, ctx);
-          IrInstr phi = then_result.type != TY_VOID ? irgen_phi(gen, then_result.type) : (IrInstr) { };
-          irgen_upsilon(gen, then_block, then_result, phi);
+          IrPhiRef phi = then_result.type != TY_VOID && else_block ? irgen_create_phi(gen) : 0;
+          irgen_upsilon(gen, then_block, phi, then_result);
           irgen_jump(gen, exit_block);
 
           if (else_block) {
@@ -177,13 +177,13 @@ IrInstr ast_compile(AstNodeRef noderef, bool static_eval, CompileContext *ctx) {
             ctx->block = else_block;
             IrInstr else_result = ast_compile(node->els, static_eval, ctx);
             assert(then_result.type == else_result.type);
-            irgen_upsilon(gen, else_block, else_result, phi);
+            irgen_upsilon(gen, else_block, phi, else_result);
             irgen_jump(gen, exit_block);
           }
 
           irgen_label(gen, exit_block);
           ctx->block = exit_block;
-          result = phi;
+          result = irgen_phi(gen, phi, then_result.type, 0);
         }
         break;
       }
