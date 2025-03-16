@@ -547,6 +547,51 @@ IrInstr irgen_read_variable(IrGen *gen, IrBlockRef block, IrVarRef var) {
 }
 
 
+#define IR_FLAG_USED 1
+
+static void mark_used_instr(IrGen *gen, IrInstrRef ref) {
+  IrInstr *instr = gen->code + ref;
+  if (instr->flags & IR_FLAG_USED) {
+    return;
+  }
+  instr->flags |= IR_FLAG_USED;
+
+  switch (instr->tag) {
+    case IR_UPSILON:
+      mark_used_instr(gen, instr->arg1);
+      break;
+    case IR_PHI: {
+      Phi *p = get_phi(gen, instr->arg0);
+      assert(p->upsilons.values[0]);
+      IrInstrRef upsilon;
+      list_foreach(upsilon, p->upsilons, gen->list_entries) {
+        mark_used_instr(gen, upsilon);
+      }
+      break;
+    }
+    case IR_ADD: mark_used_instr(gen, instr->arg0); mark_used_instr(gen, instr->arg1); break;
+    case IR_EQ: mark_used_instr(gen, instr->arg0); mark_used_instr(gen, instr->arg1); break;
+    case IR_NEQ: mark_used_instr(gen, instr->arg0); mark_used_instr(gen, instr->arg1); break;
+  }
+}
+
+static void mark_used(IrGen *gen) {
+  for (i32 i = 0; i < gen->numpos; ++i) {
+    IrInstr *instr = gen->code + i;
+    switch (instr->tag) {
+      case IR_LABEL:
+      case IR_JUMP:
+        instr->flags |= IR_FLAG_USED;
+        break;
+      case IR_RET:
+      case IR_BRANCH:
+        instr->flags |= IR_FLAG_USED;
+        mark_used_instr(gen, instr->arg0);
+        break;
+    }
+  }
+}
+
 
 
 static IrInstrRef fixup_instr(IrGen *gen, IrGen *source, i16 *map, IrInstrRef sourceref) {
@@ -644,7 +689,15 @@ static void fixup_block(IrGen *gen, IrGen *source, i16 *map, IrBlockRef block) {
 void irgen_fixup_ir(IrGen *gen, IrGen *source) {
   i16 map_buffer[65536] = { 0, };
   i16 *map = map_buffer + 32768; // map from old to new IrInstrRef
+
   irgen_clear(gen);
   fixup_block(gen, source, map, 1);
+
+  mark_used(gen);
+  for (IrInstrRef ref = -gen->numneg; ref < gen->numpos; ++ref) {
+    if (!(gen->code[ref].flags & IR_FLAG_USED)) {
+      gen->code[ref] = (IrInstr) { };
+    }
+  }
 }
 

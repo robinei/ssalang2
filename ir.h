@@ -44,7 +44,8 @@ typedef enum IrInstrTag {
 typedef union IrInstr {
   struct {
     IrInstrTag tag : 8;
-    IrType type : 8;
+    IrType type : 4;
+    u32 flags : 4;
     IrOperand arg0 : 16;
     union {
       struct {
