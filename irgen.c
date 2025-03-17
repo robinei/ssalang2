@@ -81,6 +81,8 @@ typedef struct BasicBlock {
 } BasicBlock;
 
 typedef struct Phi {
+  IrVarRef var;
+  IrInstrRef instr;
   ListEntry upsilons;
 } Phi;
 
@@ -93,7 +95,6 @@ struct IrGen {
   Vector(Variable) vars;
   Vector(Phi) phis;
   Vector(ListEntry) list_entries;
-  Vector(IrInstrRef) upsilons;
   u32_to_u64 bindings;
   u64_to_u32 ircache;
 };
@@ -105,6 +106,7 @@ static void print_instr(IrGen *gen, IrInstrRef ref, IrInstr instr) {
   switch (instr.tag) {
     case IR_NOP: printf("  NOP\n"); break;
     case IR_IDENTITY: printf("  %d = ID %d\n", ref, instr.arg0); break;
+    case IR_PRINT: printf("  %d = PRINT %d\n", ref, instr.arg0); break;
     case IR_LABEL: printf(":%d\n", instr.arg0); break;
     case IR_JUMP: printf("  JUMP :%d\n", instr.arg0); break;
     case IR_BRANCH: printf("  BRANCH %d :%d :%d\n", instr.arg0, instr.arg1, instr.arg2); break;
@@ -144,11 +146,17 @@ IrBlockRef irgen_create_block(IrGen *gen) {
   return block;
 }
 
-static BasicBlock *get_block(IrGen *gen, IrBlockRef block) {
+static BasicBlock *get_or_create_block(IrGen *gen, IrBlockRef block) {
   assert(block);
   while (vector_size(gen->blocks) <= block) {
     irgen_create_block(gen);
   }
+  return gen->blocks + block;
+}
+
+static BasicBlock *get_block(IrGen *gen, IrBlockRef block) {
+  assert(block);
+  assert(block < vector_size(gen->blocks));
   return gen->blocks + block;
 }
 
@@ -163,20 +171,24 @@ static IrBlockRef skip_trivial_successors(IrGen *gen, IrBlockRef succ) {
 }
 
 static IrInstrRef get_trivial_exit(IrGen *gen, IrBlockRef block) {
-  BasicBlock *s = get_block(gen, block);
-  if (s->last == s->first + 1 && !s->suffix.values[0]) {
-    if (gen->code[s->last].tag == IR_RET) {
-      return s->last;
+  BasicBlock *b = get_block(gen, block);
+  if (b->last == b->first + 1 && !b->suffix.values[0]) {
+    if (gen->code[b->last].tag == IR_RET) {
+      return b->last;
     }
   }
   return 0;
 }
 
-IrPhiRef irgen_create_phi(IrGen *gen) {
+static IrPhiRef irgen_create_phi_var(IrGen *gen, IrVarRef var) {
   i32 phi = vector_size(gen->phis);
   assert(phi < INT16_MAX);
-  vector_push(gen->phis, (Phi) { });
+  vector_push(gen->phis, (Phi) { .var = var });
   return phi;
+}
+
+IrPhiRef irgen_create_phi(IrGen *gen) {
+  return irgen_create_phi_var(gen, 0);
 }
 
 static Phi *get_phi(IrGen *gen, IrPhiRef phi) {
@@ -208,7 +220,6 @@ void irgen_destroy(IrGen *gen) {
   vector_free(gen->vars);
   vector_free(gen->phis);
   vector_free(gen->list_entries);
-  vector_free(gen->upsilons);
   u32_to_u64_cleanup(&gen->bindings);
   u64_to_u32_cleanup(&gen->ircache);
   free(gen);
@@ -223,7 +234,6 @@ void irgen_clear(IrGen *gen) {
   vector_clear(gen->vars);
   vector_clear(gen->phis);
   vector_clear(gen->list_entries);
-  vector_clear(gen->upsilons);
   u32_to_u64_clear(&gen->bindings);
   u64_to_u32_clear(&gen->ircache);
   irgen_create_block(gen); // block at index 0 should not be used
@@ -288,12 +298,12 @@ static IrInstrRef emit_instr_unpinned(IrGen *gen, IrInstr instr) {
 }
 
 static IrInstrRef append_block_instr(IrGen *gen, IrBlockRef block, IrInstr instr) {
-  if (block == gen->curr_block && !get_block(gen, block)->last) {
+  BasicBlock *b = get_or_create_block(gen, block);
+  if (block == gen->curr_block && !b->last) {
     assert(!IR_IS_PURE_INSTR(instr.tag));
     return emit_instr_pinned(gen, instr);
   }
   IrInstrRef ref = emit_instr_unpinned(gen, instr);
-  BasicBlock *b = get_block(gen, block);
   list_push(ref, &b->suffix, &gen->list_entries);
   return ref;
 }
@@ -301,6 +311,7 @@ static IrInstrRef append_block_instr(IrGen *gen, IrBlockRef block, IrInstr instr
 
 
 static IrInstr to_instr(IrGen *gen, IrInstrRef ref) {
+  assert(ref);
   IrInstr instr = gen->code[ref];
   switch (instr.tag) {
     case IR_CONST:
@@ -318,11 +329,13 @@ static IrInstrRef intern_instr(IrGen *gen, IrInstr instr) {
 }
 
 
+void irgen_print(IrGen *gen, IrInstr val) {
+  emit_instr_pinned(gen, (IrInstr) { .tag = IR_PRINT, .arg0 = intern_instr(gen, val) });
+}
 
 void irgen_label(IrGen *gen, IrBlockRef block) {
-  printf("label %d\n", block);
   assert(!gen->curr_block || get_block(gen, gen->curr_block)->last);
-  BasicBlock *b = get_block(gen, block);
+  BasicBlock *b = get_or_create_block(gen, block);
   assert(!b->first);
   assert(!b->last);
   assert(!b->succs[0]);
@@ -333,7 +346,8 @@ void irgen_label(IrGen *gen, IrBlockRef block) {
 }
 
 void irgen_jump(IrGen *gen, IrBlockRef target) {
-  BasicBlock *b = get_block(gen, gen->curr_block);
+  get_or_create_block(gen, target);
+  BasicBlock *b = get_or_create_block(gen, gen->curr_block);
   BasicBlock *tb = get_block(gen, target);
   assert(!b->last);
   assert(!b->succs[0]);
@@ -344,7 +358,9 @@ void irgen_jump(IrGen *gen, IrBlockRef target) {
 }
 
 void irgen_branch(IrGen *gen, IrInstr cond, IrBlockRef true_target, IrBlockRef false_target) {
-  BasicBlock *b = get_block(gen, gen->curr_block);
+  get_or_create_block(gen, true_target);
+  get_or_create_block(gen, false_target);
+  BasicBlock *b = get_or_create_block(gen, gen->curr_block);
   BasicBlock *tb = get_block(gen, true_target);
   BasicBlock *fb = get_block(gen, false_target);
   assert(!b->last);
@@ -369,7 +385,7 @@ void irgen_branch(IrGen *gen, IrInstr cond, IrBlockRef true_target, IrBlockRef f
 }
 
 void irgen_ret(IrGen *gen, IrInstr retval) {
-  BasicBlock *b = get_block(gen, gen->curr_block);
+  BasicBlock *b = get_or_create_block(gen, gen->curr_block);
   assert(!b->last);
   IrInstr instr = (IrInstr) { .tag = IR_RET, .arg0 = intern_instr(gen, retval) };
   b->last = emit_instr_pinned(gen, instr);
@@ -379,9 +395,21 @@ void irgen_upsilon(IrGen *gen, IrBlockRef block, IrPhiRef phi, IrInstr val) {
   // upsilons may be emitted even after a block is filled (recursive variable lookup will create upsilons in predecessor blocks as needed)
   if (phi) {
     IrInstrRef ref = append_block_instr(gen, block, (IrInstr) { .tag = IR_UPSILON, .arg0 = phi, .arg1 = intern_instr(gen, val) });
-    vector_push(gen->upsilons, ref);
     Phi *p = get_phi(gen, phi);
     list_push(ref, &p->upsilons, &gen->list_entries);
+  }
+}
+
+IrInstr irgen_phi(IrGen *gen, IrPhiRef phi, IrType type) {
+  if (phi) {
+    Phi *p = get_phi(gen, phi);
+    assert(type != TY_VOID);
+    assert(!p->instr);
+    p->instr = emit_instr_pinned(gen, (IrInstr) { .tag = IR_PHI, .type = type, .arg0 = phi });
+    return (IrInstr) { .tag = IR_IDENTITY, .type = type, .arg0 = p->instr };
+  } else {
+    assert(type == TY_VOID);
+    return (IrInstr) { };
   }
 }
 
@@ -391,17 +419,6 @@ IrInstr irgen_const_bool(IrGen *gen, bool val) {
 
 IrInstr irgen_const_i32(IrGen *gen, i32 val) {
   return (IrInstr) { .tag = IR_CONST, .type = TY_I32, .i32_const = val };
-}
-
-IrInstr irgen_phi(IrGen *gen, IrPhiRef phi, IrType type, IrVarRef var) {
-  if (phi) {
-    assert(type != TY_VOID);
-    IrInstrRef ref = emit_instr_pinned(gen, (IrInstr) { .tag = IR_PHI, .type = type, .arg0 = phi, .arg1 = var });
-    return (IrInstr) { .tag = IR_IDENTITY, .type = type, .arg0 = ref };
-  } else {
-    assert(type == TY_VOID);
-    return (IrInstr) { };
-  }
 }
 
 IrInstr irgen_arg(IrGen *gen, u32 arg, IrType type) {
@@ -448,25 +465,29 @@ IrInstr irgen_neq(IrGen *gen, IrInstr lhs, IrInstr rhs) {
 
 
 
-static IrInstr create_pred_upsilons(IrGen *gen, IrBlockRef block, IrInstr phi) {
+static IrInstr create_pred_upsilons(IrGen *gen, IrBlockRef block, IrPhiRef phi) {
   IrBlockRef preds[32];
   IrInstr values[32];
   int num_values = 0;
 
+  assert(block);
+  assert(phi);
+  IrVarRef var = gen->phis[phi].var;
+  assert(var);
+  IrInstrRef phi_instr_ref = gen->phis[phi].instr;
+  IrInstr phi_instr = to_instr(gen, phi_instr_ref);
+
   bool found_different = false;
   IrInstr candidate = (IrInstr) { };
-  IrVarRef var = phi.arg1;
-  BasicBlock *b = get_block(gen, block);
-
   IrBlockRef pred;
-  list_foreach(pred, b->preds, gen->list_entries) {
+  list_foreach(pred, gen->blocks[block].preds, gen->list_entries) {
     IrInstr val = irgen_read_variable(gen, pred, var);
     
     assert(num_values < 32);
     preds[num_values] = pred;
     values[num_values++] = val;
 
-    if (val.u64_repr != phi.u64_repr) {
+    if (val.u64_repr != phi_instr.u64_repr) {
       if (!candidate.u64_repr) {
         candidate = val;
       } else if (val.u64_repr != candidate.u64_repr) {
@@ -477,17 +498,14 @@ static IrInstr create_pred_upsilons(IrGen *gen, IrBlockRef block, IrInstr phi) {
 
   assert(num_values > 1);
   if (candidate.u64_repr && !found_different) {
-    IrInstrRef phiref = try_lookup_instr(gen, phi);
-    if (phiref) {
-      gen->code[phiref] = (IrInstr) { .tag = IR_IDENTITY, .type = candidate.type, .arg0 = intern_instr(gen, candidate) };
-    }
+    gen->code[phi_instr_ref] = (IrInstr) { .tag = IR_IDENTITY, .type = candidate.type, .arg0 = intern_instr(gen, candidate) };
     return candidate;
   }
 
   for (int i = 0; i < num_values; ++i) {
-    irgen_upsilon(gen, preds[i], phi.arg0, values[i]);
+    irgen_upsilon(gen, preds[i], phi, values[i]);
   }
-  return phi;
+  return phi_instr;
 }
 
 void irgen_seal_block(IrGen *gen, IrBlockRef block) {
@@ -497,7 +515,7 @@ void irgen_seal_block(IrGen *gen, IrBlockRef block) {
   b->sealed = true;
   IrInstrRef phi;
   list_foreach(phi, b->incomplete_phis, gen->list_entries) {
-    create_pred_upsilons(gen, block, gen->code[phi]);
+    create_pred_upsilons(gen, block, phi);
   }
 }
 
@@ -509,9 +527,9 @@ typedef union {
 void irgen_write_variable(IrGen *gen, IrBlockRef block, IrVarRef var, IrInstr val) {
   assert(block);
   assert(var);
-  BasicBlock *b = get_block(gen, block);
-  printf("block %d (%s) WRITE: ", block, b->sealed ? "sealed" : "unsealed"); print_instr(gen, var, val);
+  printf("block %d WRITE:", block); print_instr(gen, var, val);
   assert(val.type != TY_VOID);
+  assert(val.type == gen->vars[var].type);
   BindingKey key = {{ block, var }};
   u32_to_u64_put(&gen->bindings, key.u32_repr, val.u64_repr);
 }
@@ -519,30 +537,32 @@ void irgen_write_variable(IrGen *gen, IrBlockRef block, IrVarRef var, IrInstr va
 IrInstr irgen_read_variable(IrGen *gen, IrBlockRef block, IrVarRef var) {
   assert(block);
   assert(var);
+  assert(gen->vars[var].type);
   BindingKey key = {{ block, var }};
   BasicBlock *b = get_block(gen, block);
   IrInstr found;
   if (u32_to_u64_get(&gen->bindings, key.u32_repr, &found.u64_repr)) {
-    printf("block %d (%s) READ: ", block, b->sealed ? "sealed" : "unsealed"); print_instr(gen, var, found);
+    printf("block %d READ: ", block); print_instr(gen, var, found);
     return found;
   }
 
   IrInstr result;
   if (!b->sealed) {
-    IrInstr phi = irgen_phi(gen, irgen_create_phi(gen), gen->vars[var].type, var);
-    list_push(intern_instr(gen, phi), &b->incomplete_phis, &gen->list_entries);
-    result = phi;
+    IrPhiRef phi = irgen_create_phi_var(gen, var);
+    list_push(phi, &b->incomplete_phis, &gen->list_entries);
+    result = irgen_phi(gen, phi, gen->vars[var].type);
   } else if (b->preds.values[0] && !b->preds.values[1]) {
     // exactly one predecessor
     result = irgen_read_variable(gen, b->preds.values[0], var);
   } else {
-    IrInstr phi = irgen_phi(gen, irgen_create_phi(gen), gen->vars[var].type, var);
-    irgen_write_variable(gen, block, var, phi);
+    IrPhiRef phi = irgen_create_phi_var(gen, var);
+    result = irgen_phi(gen, phi, gen->vars[var].type);
+    irgen_write_variable(gen, block, var, result);
     result = create_pred_upsilons(gen, block, phi);
   }
 
   irgen_write_variable(gen, block, var, result);
-  printf("block %d (%s) READ: ", block, b->sealed ? "sealed" : "unsealed"); print_instr(gen, var, result);
+  printf("block %d READ: ", block); print_instr(gen, var, result);
   return result;
 }
 
@@ -569,9 +589,12 @@ static void mark_used_instr(IrGen *gen, IrInstrRef ref) {
       }
       break;
     }
-    case IR_ADD: mark_used_instr(gen, instr->arg0); mark_used_instr(gen, instr->arg1); break;
-    case IR_EQ: mark_used_instr(gen, instr->arg0); mark_used_instr(gen, instr->arg1); break;
-    case IR_NEQ: mark_used_instr(gen, instr->arg0); mark_used_instr(gen, instr->arg1); break;
+    case IR_ADD:
+    case IR_EQ:
+    case IR_NEQ:
+      mark_used_instr(gen, instr->arg0);
+      mark_used_instr(gen, instr->arg1);
+      break;
   }
 }
 
@@ -585,6 +608,7 @@ static void mark_used(IrGen *gen) {
         break;
       case IR_RET:
       case IR_BRANCH:
+      case IR_PRINT:
         instr->flags |= IR_FLAG_USED;
         mark_used_instr(gen, instr->arg0);
         break;
@@ -594,26 +618,27 @@ static void mark_used(IrGen *gen) {
 
 
 
+#define FIXUP(Id) to_instr(gen, fixup_instr(gen, source, map, Id))
+#define FIXUP_BINOP(EmitFunc) intern_instr(gen, EmitFunc(gen, FIXUP(instr.arg0), FIXUP(instr.arg1)))
+
 static IrInstrRef fixup_instr(IrGen *gen, IrGen *source, i16 *map, IrInstrRef sourceref) {
   if (map[sourceref]) {
     return map[sourceref];
   }
-
-#define FIXUP(Id) to_instr(gen, fixup_instr(gen, source, map, Id))
-#define FIXUP_BINOP(EmitFunc) intern_instr(gen, EmitFunc(gen, FIXUP(instr.arg0), FIXUP(instr.arg1)))
 
   IrInstrRef dest_id = 0;
   IrInstr instr = source->code[sourceref];
   switch (instr.tag) {
     case IR_NOP: return 0;
     case IR_IDENTITY: dest_id = fixup_instr(gen, source, map, instr.arg0); break;
+    case IR_PRINT: irgen_print(gen, FIXUP(instr.arg0)); return 0;
     case IR_LABEL: irgen_label(gen, instr.arg0); return 0;
-    case IR_JUMP: irgen_jump(gen, instr.arg0); return 0;
-    case IR_BRANCH: irgen_branch(gen, FIXUP(instr.arg0), instr.arg1, instr.arg2); return 0;
+    case IR_JUMP: assert(0); return 0;
+    case IR_BRANCH: assert(0); return 0;
     case IR_RET: irgen_ret(gen, FIXUP(instr.arg0)); return 0;
     case IR_UPSILON: irgen_upsilon(gen, gen->curr_block, instr.arg0, FIXUP(instr.arg1)); return 0;
+    case IR_PHI: dest_id = irgen_phi(gen, instr.arg0, instr.type).arg0; break;
     case IR_CONST: dest_id = intern_instr(gen, instr); break;
-    case IR_PHI: dest_id = irgen_phi(gen, instr.arg0, instr.type, instr.arg1).arg0; break;
     case IR_ARG: dest_id = intern_instr(gen, instr); break;
     case IR_ADD: dest_id = FIXUP_BINOP(irgen_add); break;
     case IR_EQ: dest_id = FIXUP_BINOP(irgen_eq); break;
@@ -625,15 +650,67 @@ static IrInstrRef fixup_instr(IrGen *gen, IrGen *source, i16 *map, IrInstrRef so
   return dest_id;
 }
 
+static void fixup_block(IrGen *gen, IrGen *source, i16 *map, IrBlockRef block);
+
+static void fixup_jump(IrGen *gen, IrGen *source, i16 *map, IrBlockRef target) {
+  IrBlockRef succ = skip_trivial_successors(source, target); // skip through blocks that only jump
+
+  IrInstrRef trivial_exit = get_trivial_exit(source, succ);
+  if (trivial_exit) {
+    // if the jump target immediately exits, just exit here instead of jumping
+    fixup_instr(gen, source, map, trivial_exit);
+    return;
+  }
+
+  BasicBlock *s = get_block(source, succ);
+  if (!s->preds.values[1]) {
+    // we are the single predecessor to our successor - don't emit jump (merge the blocks)
+    ++s->first; // skip label
+    fixup_block(gen, source, map, succ);
+    --s->first;
+    return;
+  }
+
+  irgen_jump(gen, succ);
+  fixup_block(gen, source, map, succ);
+}
+
+static void fixup_branch(IrGen *gen, IrGen *source, i16 *map, IrInstr branch) {
+  IrBlockRef true_succ = skip_trivial_successors(source, branch.arg1);
+  IrBlockRef false_succ = skip_trivial_successors(source, branch.arg2);
+
+  IrInstrRef true_exit = get_trivial_exit(source, true_succ);
+  IrInstrRef false_exit = get_trivial_exit(source, false_succ);
+  if (true_exit && false_exit && source->code[true_exit].u64_repr == source->code[false_exit].u64_repr) {
+    // if the two branch blocks just immediately exit the same way, just exit here instead of branching
+    fixup_instr(gen, source, map, true_exit);
+    return;
+  }
+
+  IrInstr cond = FIXUP(branch.arg0);
+  if (cond.tag == IR_CONST) {
+    fixup_jump(gen, source, map, cond.bool_const ? true_succ : false_succ);
+    return;
+  }
+
+  if (true_succ == false_succ) {
+    fixup_jump(gen, source, map, true_succ);
+    return;
+  }
+
+  irgen_branch(gen, cond, true_succ, false_succ);
+  fixup_block(gen, source, map, true_succ);
+  fixup_block(gen, source, map, false_succ);
+}
+
 static void fixup_block(IrGen *gen, IrGen *source, i16 *map, IrBlockRef block) {
   BasicBlock *b = get_block(source, block);
+  assert(b->first);
+  assert(b->last);
   if (b->visited) {
     return;
   }
   b->visited = true;
-  assert(b->first);
-  assert(b->last);
-  assert(b->sealed);
 
   // fixup all non-terminal instructions in the block
   IrInstrRef sourceref = b->first;
@@ -644,46 +721,26 @@ static void fixup_block(IrGen *gen, IrGen *source, i16 *map, IrBlockRef block) {
 
   // then fixup and append the suffix instructions
   IrInstrRef ref;
-  list_foreach(ref, b->suffix, source->list_entries) {
+  list_foreach(ref, source->blocks[block].suffix, source->list_entries) {
     fixup_instr(gen, source, map, ref);
   }
 
   // then handle the terminal instruction
   IrInstr term = source->code[sourceref];
   switch (term.tag) {
-    case IR_JUMP: {
-      IrBlockRef succ = skip_trivial_successors(source, term.arg0); // skip through blocks that only jump
-      IrInstrRef trivial_exit = get_trivial_exit(source, succ);
-      if (trivial_exit) {
-        // if the jump target just immediately exist, just exit here instead of jumping
-        fixup_instr(gen, source, map, trivial_exit);
-      } else {
-        irgen_jump(gen, succ);
-        fixup_block(gen, source, map, succ);
-      }
+    case IR_JUMP:
+      fixup_jump(gen, source, map, term.arg0);
       break;
-    }
-    case IR_BRANCH: {
-      IrBlockRef true_succ = skip_trivial_successors(source, term.arg1);
-      IrBlockRef false_succ = skip_trivial_successors(source, term.arg2);
-      IrInstrRef true_exit = get_trivial_exit(source, true_succ);
-      IrInstrRef false_exit = get_trivial_exit(source, false_succ);
-      if (true_exit && false_exit && source->code[true_exit].u64_repr == source->code[false_exit].u64_repr) {
-        // if the two branch blocks just immediately exit the same way, just exit here instead of branching
-        fixup_instr(gen, source, map, true_exit);
-      } else {
-        irgen_branch(gen, gen->code[fixup_instr(gen, source, map, term.arg0)], true_succ, false_succ);
-        fixup_block(gen, source, map, true_succ);
-        fixup_block(gen, source, map, false_succ);
-      }
+    case IR_BRANCH:
+      fixup_branch(gen, source, map, term);
       break;
-    }
+    case IR_RET:
+      irgen_ret(gen, FIXUP(term.arg0));
+      break;
     default:
-      fixup_instr(gen, source, map, sourceref);
+      assert(0 && "illegal terminating instruction");
       break;
   }
-
-  get_block(gen, block)->sealed = true;
 }
 
 void irgen_fixup_ir(IrGen *gen, IrGen *source) {

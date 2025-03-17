@@ -102,6 +102,7 @@ typedef struct AstBreakContNode {
   AstNode node;
   bool is_static : 1;
   u32 scope_index : 31;
+  AstNodeRef value;
 } AstBreakContNode;
 
 typedef struct AstReturnNode {

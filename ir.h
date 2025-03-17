@@ -19,6 +19,8 @@ typedef enum IrType {
 typedef enum IrInstrTag {
   IR_NOP,
   IR_IDENTITY, // (IrInstrRef replace_with)
+
+  IR_PRINT, // (IrInstrRef value)
   
   IR_LABEL, // (IrBlockRef block)
 
@@ -28,7 +30,7 @@ typedef enum IrInstrTag {
   IR_RET, // (IrInstrRef value)
 
   IR_UPSILON, // (IrPhiRef phi, IrInstrRef value)
-  IR_PHI, // (IrPhiRef phi[, IrVarRef var])
+  IR_PHI, // (IrPhiRef phi)
 
   // all after this point must be pure
   IR_CONST,
