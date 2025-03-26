@@ -1,0 +1,7 @@
+  -1 = CONST 1
+  NOP
+:1
+  2 = PRINT -1
+  3 = PRINT -1
+  4 = PRINT -1
+  RET -1

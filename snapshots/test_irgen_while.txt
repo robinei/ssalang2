@@ -1,0 +1,17 @@
+  -5 = ADD 5 -4
+  -4 = CONST 1
+  -3 = NEQ 5 -2
+  -2 = CONST 10
+  -1 = CONST 0
+  NOP
+:1
+  UPSILON [1] -1
+  JUMP :2
+:2
+  5 = PHI [1]
+  BRANCH -3 :3 :4
+:3
+  UPSILON [1] -5
+  JUMP :2
+:4
+  RET 5

@@ -1,6 +1,9 @@
 { pkgs ? import <nixpkgs> {}}:
 
 pkgs.mkShell {
-  packages = with pkgs; [ gnumake gcc gdb clang-tools ];
+  packages = with pkgs; [ python3 gnumake gcc gdb clang-tools ];
+  shellHook = ''
+    export TMPDIR="/tmp"
+  '';
 }
 
