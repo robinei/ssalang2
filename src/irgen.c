@@ -567,14 +567,13 @@ IrInstr irgen_read_variable(IrGen *gen, IrBlockRef block, IrVarRef var) {
 }
 
 
-#define IR_FLAG_USED 1
 
 static void mark_used_instr(IrGen *gen, IrInstrRef ref) {
   IrInstr *instr = gen->code + ref;
-  if (instr->flags & IR_FLAG_USED) {
+  if (instr->flags & IR_FLAG_MARK) {
     return;
   }
-  instr->flags |= IR_FLAG_USED;
+  instr->flags |= IR_FLAG_MARK;
 
   switch (instr->tag) {
     case IR_UPSILON:
@@ -598,67 +597,78 @@ static void mark_used_instr(IrGen *gen, IrInstrRef ref) {
   }
 }
 
-static void mark_used(IrGen *gen) {
+static void replace_dead_code_with_nops(IrGen *gen) {
   for (i32 i = 0; i < gen->numpos; ++i) {
     IrInstr *instr = gen->code + i;
     switch (instr->tag) {
       case IR_LABEL:
       case IR_JUMP:
-        instr->flags |= IR_FLAG_USED;
+        instr->flags |= IR_FLAG_MARK;
         break;
       case IR_RET:
       case IR_BRANCH:
       case IR_PRINT:
-        instr->flags |= IR_FLAG_USED;
+        instr->flags |= IR_FLAG_MARK;
         mark_used_instr(gen, instr->arg0);
         break;
+    }
+  }
+
+  for (IrInstrRef ref = -gen->numneg; ref < gen->numpos; ++ref) {
+    if (!(gen->code[ref].flags & IR_FLAG_MARK)) {
+      gen->code[ref] = (IrInstr) { };
+    } else {
+      gen->code[ref].flags &= ~IR_FLAG_MARK;
     }
   }
 }
 
 
 
-#define FIXUP(Id) to_instr(gen, fixup_instr(gen, source, map, Id))
+#define FIXUP(Id) to_instr(gen, fixup_instr(gen, source, Id))
 #define FIXUP_BINOP(EmitFunc) intern_instr(gen, EmitFunc(gen, FIXUP(instr.arg0), FIXUP(instr.arg1)))
 
-static IrInstrRef fixup_instr(IrGen *gen, IrGen *source, i16 *map, IrInstrRef sourceref) {
-  if (map[sourceref]) {
-    return map[sourceref];
+static IrInstrRef fixup_instr(IrGen *gen, IrGen *source, IrInstrRef sourceref) {
+  IrInstr instr = source->code[sourceref];
+
+  // check if it was already mapped
+  if ((instr.flags & IR_FLAG_MARK) && instr.tag == IR_IDENTITY) {
+    return instr.arg0;
   }
 
-  IrInstrRef dest_id = 0;
-  IrInstr instr = source->code[sourceref];
+  IrInstrRef destref = 0;
   switch (instr.tag) {
     case IR_NOP: return 0;
-    case IR_IDENTITY: dest_id = fixup_instr(gen, source, map, instr.arg0); break;
+    case IR_IDENTITY: destref = fixup_instr(gen, source, instr.arg0); break;
     case IR_PRINT: irgen_print(gen, FIXUP(instr.arg0)); return 0;
     case IR_LABEL: irgen_label(gen, instr.arg0); return 0;
     case IR_JUMP: assert(0); return 0;
     case IR_BRANCH: assert(0); return 0;
     case IR_RET: irgen_ret(gen, FIXUP(instr.arg0)); return 0;
     case IR_UPSILON: irgen_upsilon(gen, gen->curr_block, instr.arg0, FIXUP(instr.arg1)); return 0;
-    case IR_PHI: dest_id = irgen_phi(gen, instr.arg0, instr.type).arg0; break;
-    case IR_CONST: dest_id = intern_instr(gen, instr); break;
-    case IR_ARG: dest_id = intern_instr(gen, instr); break;
-    case IR_ADD: dest_id = FIXUP_BINOP(irgen_add); break;
-    case IR_EQ: dest_id = FIXUP_BINOP(irgen_eq); break;
-    case IR_NEQ: dest_id = FIXUP_BINOP(irgen_neq); break;
+    case IR_PHI: destref = irgen_phi(gen, instr.arg0, instr.type).arg0; break;
+    case IR_CONST: destref = intern_instr(gen, instr); break;
+    case IR_ARG: destref = intern_instr(gen, instr); break;
+    case IR_ADD: destref = FIXUP_BINOP(irgen_add); break;
+    case IR_EQ: destref = FIXUP_BINOP(irgen_eq); break;
+    case IR_NEQ: destref = FIXUP_BINOP(irgen_neq); break;
     default: assert(0 && "unknown instruction");
   }
 
-  map[sourceref] = dest_id;
-  return dest_id;
+  // store as already mapped using IDENITITY with the MARK flag bit set, and with a reference to the destination instruction.
+  source->code[sourceref] = (IrInstr) { .tag = IR_IDENTITY, .flags = IR_FLAG_MARK, .arg0 = destref };
+  return destref;
 }
 
-static void fixup_block(IrGen *gen, IrGen *source, i16 *map, IrBlockRef block);
+static void fixup_block(IrGen *gen, IrGen *source, IrBlockRef block);
 
-static void fixup_jump(IrGen *gen, IrGen *source, i16 *map, IrBlockRef target) {
+static void fixup_jump(IrGen *gen, IrGen *source, IrBlockRef target) {
   IrBlockRef succ = skip_trivial_successors(source, target); // skip through blocks that only jump
 
   IrInstrRef trivial_exit = get_trivial_exit(source, succ);
   if (trivial_exit) {
     // if the jump target immediately exits, just exit here instead of jumping
-    fixup_instr(gen, source, map, trivial_exit);
+    fixup_instr(gen, source, trivial_exit);
     return;
   }
 
@@ -666,16 +676,16 @@ static void fixup_jump(IrGen *gen, IrGen *source, i16 *map, IrBlockRef target) {
   if (!s->preds.values[1]) {
     // we are the single predecessor to our successor - don't emit jump (merge the blocks)
     ++s->first; // skip label
-    fixup_block(gen, source, map, succ);
+    fixup_block(gen, source, succ);
     --s->first;
     return;
   }
 
   irgen_jump(gen, succ);
-  fixup_block(gen, source, map, succ);
+  fixup_block(gen, source, succ);
 }
 
-static void fixup_branch(IrGen *gen, IrGen *source, i16 *map, IrInstr branch) {
+static void fixup_branch(IrGen *gen, IrGen *source, IrInstr branch) {
   IrBlockRef true_succ = skip_trivial_successors(source, branch.arg1);
   IrBlockRef false_succ = skip_trivial_successors(source, branch.arg2);
 
@@ -683,27 +693,27 @@ static void fixup_branch(IrGen *gen, IrGen *source, i16 *map, IrInstr branch) {
   IrInstrRef false_exit = get_trivial_exit(source, false_succ);
   if (true_exit && false_exit && source->code[true_exit].u64_repr == source->code[false_exit].u64_repr) {
     // if the two branch blocks just immediately exit the same way, just exit here instead of branching
-    fixup_instr(gen, source, map, true_exit);
+    fixup_instr(gen, source, true_exit);
     return;
   }
 
   IrInstr cond = FIXUP(branch.arg0);
   if (cond.tag == IR_CONST) {
-    fixup_jump(gen, source, map, cond.bool_const ? true_succ : false_succ);
+    fixup_jump(gen, source, cond.bool_const ? true_succ : false_succ);
     return;
   }
 
   if (true_succ == false_succ) {
-    fixup_jump(gen, source, map, true_succ);
+    fixup_jump(gen, source, true_succ);
     return;
   }
 
   irgen_branch(gen, cond, true_succ, false_succ);
-  fixup_block(gen, source, map, true_succ);
-  fixup_block(gen, source, map, false_succ);
+  fixup_block(gen, source, true_succ);
+  fixup_block(gen, source, false_succ);
 }
 
-static void fixup_block(IrGen *gen, IrGen *source, i16 *map, IrBlockRef block) {
+static void fixup_block(IrGen *gen, IrGen *source, IrBlockRef block) {
   BasicBlock *b = get_block(source, block);
   assert(b->first);
   assert(b->last);
@@ -716,26 +726,26 @@ static void fixup_block(IrGen *gen, IrGen *source, i16 *map, IrBlockRef block) {
   IrInstrRef sourceref = b->first;
   while (!IR_IS_TERMINAL_INSTR(source->code[sourceref].tag)) {
     assert(sourceref < source->maxpos);
-    fixup_instr(gen, source, map, sourceref++);
+    fixup_instr(gen, source, sourceref++);
   }
 
   // then fixup and append the suffix instructions
   IrInstrRef ref;
   list_foreach(ref, source->blocks[block].suffix, source->list_entries) {
-    fixup_instr(gen, source, map, ref);
+    fixup_instr(gen, source, ref);
   }
 
   // then handle the terminal instruction
   IrInstr term = source->code[sourceref];
   switch (term.tag) {
     case IR_JUMP:
-      fixup_jump(gen, source, map, term.arg0);
+      fixup_jump(gen, source, term.arg0);
       break;
     case IR_BRANCH:
-      fixup_branch(gen, source, map, term);
+      fixup_branch(gen, source, term);
       break;
     case IR_RET:
-      irgen_ret(gen, FIXUP(term.arg0));
+      fixup_instr(gen, source, sourceref);
       break;
     default:
       assert(0 && "illegal terminating instruction");
@@ -744,18 +754,9 @@ static void fixup_block(IrGen *gen, IrGen *source, i16 *map, IrBlockRef block) {
 }
 
 void irgen_fixup_ir(IrGen *gen, IrGen *source) {
-  i16 map_buffer[65536] = { 0, };
-  i16 *map = map_buffer + 32768; // map from old to new IrInstrRef
-
   irgen_clear(gen);
-  fixup_block(gen, source, map, 1);
-
-  mark_used(gen);
-  for (IrInstrRef ref = -gen->numneg; ref < gen->numpos; ++ref) {
-    if (!(gen->code[ref].flags & IR_FLAG_USED)) {
-      gen->code[ref] = (IrInstr) { };
-    }
-  }
+  fixup_block(gen, source, 1);
+  replace_dead_code_with_nops(gen);
 }
 
 
