@@ -15,6 +15,8 @@ typedef enum IrType {
   TY_I32,
 } IrType;
 
+#define IR_FLAG_MARK 1
+
 // annotated with types for (arg0[, arg1[, arg2]])
 typedef enum IrInstrTag {
   IR_NOP,
