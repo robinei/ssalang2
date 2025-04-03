@@ -27,6 +27,7 @@ typedef struct CompileContext {
   IrGen *gen;
   IrBlockRef block;
   AstFuncNode *func;
+  int loop_depth;
   LocalSlot locals[100];
   ScopeSlot scopes[100];
 } CompileContext;

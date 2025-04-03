@@ -47,6 +47,27 @@ start:
   vector_push(*entries, ((ListEntry) {{ value }}));
 }
 
+static void list_push_unique(i16 value, ListEntry *e, Vector(ListEntry) *entries) {
+start:
+  for (int i = 0; i < 3; ++i) {
+    if (e->values[i] == value) {
+      return;
+    }
+    if (!e->values[i]) {
+      e->values[i] = value;
+      return;
+    }
+  }
+  if (e->next) {
+    e = *entries + e->next;
+    goto start;
+  }
+  int index = vector_size(*entries);
+  assert(index < INT16_MAX);
+  e->next = index;
+  vector_push(*entries, ((ListEntry) {{ value }}));
+}
+
 static void list_clear(ListEntry *e, ListEntry **entries) {
 start:
   for (int i = 0; i < 3; ++i) {
@@ -56,6 +77,20 @@ start:
     e = *entries + e->next;
     goto start;
   }
+}
+
+static bool list_contains(i16 value, ListEntry *e, Vector(ListEntry) entries) {
+start:
+  for (int i = 0; i < 3; ++i) {
+    if (e->values[i] == value) {
+      return true;
+    }
+  }
+  if (e->next) {
+    e = entries + e->next;
+    goto start;
+  }
+  return false;
 }
 
 #define list_foreach(Item, Head, Entries) \
@@ -74,7 +109,15 @@ typedef struct BasicBlock {
   u32 visited : 1;
   u32 first : 15;
   u32 last : 15;
+  
+  u32 idom : 16;
+  u32 dom_depth : 16;
+  
+  u32 postorder : 16;
+  u32 loop_depth : 16;
+
   u16 succs[2];
+  
   ListEntry preds;
   ListEntry incomplete_phis;
   ListEntry suffix;
@@ -101,12 +144,28 @@ struct IrGen {
 
 
 
+#define IR_INSTR_INFO_ARG0_IS_VALUE 1
+#define IR_INSTR_INFO_ARG1_IS_VALUE 2
+#define IR_INSTR_INFO_ARG2_IS_VALUE 4
+
+static int instr_info[IR_NUM_TAGS] = {
+  [IR_PRINT] = IR_INSTR_INFO_ARG0_IS_VALUE,
+  [IR_BRANCH] = IR_INSTR_INFO_ARG0_IS_VALUE,
+  [IR_RET] = IR_INSTR_INFO_ARG0_IS_VALUE,
+  [IR_UPSILON] = IR_INSTR_INFO_ARG1_IS_VALUE,
+  [IR_ADD] = IR_INSTR_INFO_ARG0_IS_VALUE | IR_INSTR_INFO_ARG1_IS_VALUE,
+  [IR_EQ] = IR_INSTR_INFO_ARG0_IS_VALUE | IR_INSTR_INFO_ARG1_IS_VALUE,
+  [IR_NEQ] = IR_INSTR_INFO_ARG0_IS_VALUE | IR_INSTR_INFO_ARG1_IS_VALUE
+};
+
+
+
 
 static void print_instr(IrGen *gen, IrInstrRef ref, IrInstr instr) {
   switch (instr.tag) {
     case IR_NOP: printf("  NOP\n"); break;
     case IR_IDENTITY: printf("  %d = ID %d\n", ref, instr.arg0); break;
-    case IR_PRINT: printf("  %d = PRINT %d\n", ref, instr.arg0); break;
+    case IR_PRINT: printf("  PRINT %d\n", instr.arg0); break;
     case IR_LABEL: printf(":%d\n", instr.arg0); break;
     case IR_JUMP: printf("  JUMP :%d\n", instr.arg0); break;
     case IR_BRANCH: printf("  BRANCH %d :%d :%d\n", instr.arg0, instr.arg1, instr.arg2); break;
@@ -568,6 +627,8 @@ IrInstr irgen_read_variable(IrGen *gen, IrBlockRef block, IrVarRef var) {
 
 
 
+
+
 static void mark_used_instr(IrGen *gen, IrInstrRef ref) {
   IrInstr *instr = gen->code + ref;
   if (instr->flags & IR_FLAG_MARK) {
@@ -760,6 +821,323 @@ void irgen_fixup_ir(IrGen *gen, IrGen *source) {
 }
 
 
+
+
+
+static void generate_postorder(BasicBlock *blocks, IrBlockRef blockref, IrBlockRef **result) {
+  if (blockref) {
+    BasicBlock *b = &blocks[blockref];
+    if (!b->visited) {
+      b->visited = true;
+      generate_postorder(blocks, b->succs[0], result);
+      generate_postorder(blocks, b->succs[1], result);
+      b->postorder = vector_size(*result);
+      vector_push(*result, blockref);
+    }
+  }
+}
+
+static void generate_dominator_tree(IrGen *gen) {
+  BasicBlock *blocks = gen->blocks;
+
+  IrBlockRef *postorder = NULL;
+  generate_postorder(blocks, 1, &postorder);
+  int postorder_size = vector_size(postorder);
+  assert(postorder[postorder_size - 1] == 1); // entry block is always last in postorder
+
+  IrBlockRef *doms = calloc(1, sizeof(IrBlockRef) * postorder_size);
+  for (int i = 0; i < postorder_size; ++i) {
+    doms[i] = -1;
+  }
+  
+  doms[blocks[1].postorder] = blocks[1].postorder;
+  bool changed = true;
+  while (changed) {
+    changed = false;
+    for (int b = postorder_size - 1; b >= 0; --b) {
+      IrBlockRef block = postorder[b];
+      if (block == 1) {
+        continue; // start node
+      }
+      int idom = -1;
+      IrBlockRef source;
+      list_foreach(source, blocks[block].preds, gen->list_entries) {
+        int p = blocks[source].postorder;
+        if (doms[p] < 0) {
+          continue;
+        }
+        if (idom < 0) {
+          idom = p;
+        } else {
+          int f1 = p;
+          int f2 = idom;
+          while (f1 != f2) {
+            while (f1 < f2) {
+              f1 = doms[f1];
+            }
+            while (f2 < f1) {
+              f2 = doms[f2];
+            }
+          }
+          idom = f1;
+        }
+      }
+      if (idom != doms[b]) {
+        doms[b] = idom;
+        changed = true;
+      }
+    }
+  }
+  
+  blocks[1].idom = 0;
+  blocks[1].dom_depth = 0;
+  blocks[1].visited = false;
+  for (int i = postorder_size - 2; i >= 0; --i) { // skip the entry block
+    BasicBlock *b = &blocks[postorder[i]];
+    b->idom = postorder[doms[i]];
+    b->dom_depth = blocks[b->idom].dom_depth + 1;
+    b->visited = false;
+  }
+
+  free(doms);
+  vector_free(postorder);
+}
+
+
+
+typedef struct InstrPlacement {
+  IrInstrRef old;
+  IrInstrRef new;
+} InstrPlacement;
+
+#define NAME placement_sort
+#define TYPE InstrPlacement
+#define COMPARE(a, b) ((a).new - (b).new)
+#include "mergesort.h"
+
+static ListEntry *calculate_instruction_uses(IrGen *gen) {
+  ListEntry *uses = (ListEntry *)calloc(gen->numneg + gen->numpos, sizeof(ListEntry)) + gen->numneg;
+  for (IrInstrRef ref = -gen->numneg; ref < gen->numpos; ++ref) {
+    IrInstr instr = gen->code[ref];    
+    int info = instr_info[instr.tag];    
+    if (info & IR_INSTR_INFO_ARG0_IS_VALUE) { list_push_unique(ref, &uses[instr.arg0], &gen->list_entries); }
+    if (info & IR_INSTR_INFO_ARG1_IS_VALUE) { list_push_unique(ref, &uses[instr.arg1], &gen->list_entries); }
+    if (info & IR_INSTR_INFO_ARG2_IS_VALUE) { list_push_unique(ref, &uses[instr.arg2], &gen->list_entries); }
+  }
+  return uses;
+}
+
+static IrBlockRef *calculate_instruction_blocks(IrGen *gen) {
+  IrBlockRef *instr_blocks = (IrBlockRef *)calloc(gen->numneg + gen->numpos, sizeof(IrBlockRef)) + gen->numneg;
+  IrBlockRef curr_block = 0;
+  // only instructions with positive indexes are fixed to a block
+  for (IrInstrRef ref = 1; ref < gen->numpos; ++ref) {
+    IrInstr instr = gen->code[ref];
+    if (instr.tag == IR_LABEL) {
+      curr_block = instr.arg0;
+    }
+    instr_blocks[ref] = curr_block;
+  }
+  return instr_blocks;
+}
+
+static InstrPlacement *calculate_initial_instruction_placement(IrGen *gen) {
+  InstrPlacement *placement = (InstrPlacement *)calloc(gen->numneg + gen->numpos, sizeof(InstrPlacement)) + gen->numneg;
+  for (IrInstrRef ref = -gen->numneg; ref < gen->numneg; ++ref) {
+    placement[ref] = (InstrPlacement) { .old = ref, .new = ref };
+  }
+  return placement;
+}
+
+/*
+This function schedules a pure instruction (initially having a negative index) into the main instruction stream 
+(positive indices). Pure instructions can be scheduled flexibly as their order doesn't affect program behavior,
+unlike side-effecting instructions which must maintain their relative order.
+
+The placement of the instruction must satisfy two key constraints:
+1. The instruction must dominate all its uses (determines starting point at nearest common dominator)
+2. All dependencies of the instruction must dominate its placement (limits how high we can move)
+
+The algorithm:
+1. Find the nearest common dominator of all uses as starting point
+2. Walk up dominator tree until hitting a dependency, tracking best loop_depth seen
+3. Place at the position with minimal loop_depth found during the walk
+
+Within the chosen block, the instruction is placed immediately after its latest dependency.
+*/
+static void schedule_pure_instruction(IrGen *gen, IrInstrRef ref, ListEntry *instr_uses, IrBlockRef *instr_blocks, InstrPlacement *placement) {
+  ListEntry uses = instr_uses[ref];
+  if (!uses.values[0]) {
+    gen->code[ref] = (IrInstr) { .tag = IR_NOP }; // eliminate dead code
+    return;
+  }
+  IrInstr instr = gen->code[ref];
+  if (instr.tag == IR_CONST) {
+    return; // let constants stay unscheduled
+  }
+  int info = instr_info[instr.tag];
+
+  // Find the nearest common dominator of all uses - this is our lower bound
+  // We can't place the instruction below this or it won't dominate all uses
+  IrBlockRef lower_bound = 0;
+  IrInstrRef use_ref;
+  list_foreach(use_ref, uses, gen->list_entries) {
+    IrBlockRef use_block = instr_blocks[use_ref];
+    if (!lower_bound) {
+      lower_bound = use_block;
+      continue;
+    }
+
+    while (lower_bound != use_block) {
+      BasicBlock *lower_bb = &gen->blocks[lower_bound];
+      BasicBlock *use_bb = &gen->blocks[use_block];
+      
+      if (lower_bb->dom_depth > use_bb->dom_depth) {
+        lower_bound = lower_bb->idom;
+      } else {
+        use_block = use_bb->idom;
+      }
+    }
+  }
+
+  IrBlockRef dep_blocks[3] = {0};
+  int num_deps = 0;
+  if ((info & IR_INSTR_INFO_ARG0_IS_VALUE)) {
+    assert(instr.arg0);
+    assert(instr_blocks[instr.arg0]);
+    assert(placement[instr.arg0].new > 0);
+    dep_blocks[num_deps++] = instr_blocks[instr.arg0];
+  }
+  if ((info & IR_INSTR_INFO_ARG1_IS_VALUE)) {
+    assert(instr.arg1);
+    assert(instr_blocks[instr.arg1]);
+    assert(placement[instr.arg1].new > 0);
+    dep_blocks[num_deps++] = instr_blocks[instr.arg1];
+  }
+  if ((info & IR_INSTR_INFO_ARG2_IS_VALUE)) {
+    assert(instr.arg2);
+    assert(instr_blocks[instr.arg2]);
+    assert(placement[instr.arg2].new > 0);
+    dep_blocks[num_deps++] = instr_blocks[instr.arg2];
+  }
+
+  // Walk up from lower_bound, and move best_block to a higher block if it has a lower loop depth
+  // (while not walking past any dependencies)
+  int min_loop_depth = gen->blocks[lower_bound].loop_depth;
+  IrBlockRef best_block = lower_bound;
+  IrBlockRef candidate = lower_bound;
+  while (candidate) {
+    // Consider this block for placement first
+    BasicBlock *bb = &gen->blocks[candidate];
+    if (bb->loop_depth < min_loop_depth) {
+      best_block = candidate;
+      min_loop_depth = bb->loop_depth;
+    }
+    // Then check if it's a dependency block - can't go higher
+    for (int i = 0; i < num_deps; i++) {
+      if (candidate == dep_blocks[i]) {
+        goto found_dep;
+      }
+    }
+    candidate = gen->blocks[candidate].idom;
+  }
+  // Reached root without finding any dependency
+  assert(num_deps == 0);
+found_dep:
+
+  // Find position after last dependency within the chosen block
+  IrInstrRef latest_dep = 0;
+  if ((info & IR_INSTR_INFO_ARG0_IS_VALUE) && instr_blocks[instr.arg0] == best_block && placement[instr.arg0].new > latest_dep) {
+    latest_dep = instr.arg0;
+  }
+  if ((info & IR_INSTR_INFO_ARG1_IS_VALUE) && instr_blocks[instr.arg1] == best_block && placement[instr.arg1].new > latest_dep) {
+    latest_dep = instr.arg1;
+  }
+  if ((info & IR_INSTR_INFO_ARG2_IS_VALUE) && instr_blocks[instr.arg2] == best_block && placement[instr.arg2].new > latest_dep) {
+    latest_dep = instr.arg2;
+  }
+  if (latest_dep == 0) {
+    latest_dep = gen->blocks[best_block].first;
+  }
+
+  placement[ref].new = latest_dep + 1;
+  instr_blocks[ref] = best_block;
+}
+
+
+static void schedule_pure_instructions(IrGen *gen) {
+  generate_dominator_tree(gen);
+  ListEntry *instr_uses = calculate_instruction_uses(gen);
+  IrBlockRef *instr_blocks = calculate_instruction_blocks(gen);
+  InstrPlacement *placement = calculate_initial_instruction_placement(gen);
+
+  for (int ref = -1; ref >= -gen->numneg; --ref) {
+    schedule_pure_instruction(gen, ref, instr_uses, instr_blocks, placement);
+  }
+
+  // Reverse the order of instructions at negative indexes, so that dependencies come before dependents
+  // (negative index instructions are created in order from -1 to -numneg, so the instruction at -1 has no dependencies,
+  // and further instructions depend only on earlier instructions)
+  for (int i = -1, j = -gen->numneg; i > j; i--, j++) {
+    IrInstr tmp = gen->code[i];
+    gen->code[i] = gen->code[j]; 
+    gen->code[j] = tmp;
+  }
+
+  int count = gen->numneg + gen->numpos;
+  InstrPlacement *orig_placement = malloc(count * sizeof(InstrPlacement)) - gen->numneg;
+  memcpy(orig_placement - gen->numneg, placement - gen->numneg, count * sizeof(InstrPlacement));
+
+  InstrPlacement *temp = malloc(count * sizeof(InstrPlacement));
+  placement_sort(placement - gen->numneg, 0, count - 1, temp);
+  free(temp);
+
+  IrInstr *old_code = gen->code;
+  IrInstr *new_code = malloc(count * sizeof(IrInstr));
+  int out = 0;
+  int new_numneg = 0;
+  int new_numpos = 0;
+
+  for (IrInstrRef ref = -gen->numneg; ref < gen->numpos; ++ref) {
+    IrInstr instr = gen->code[placement[ref].old];
+    int info = instr_info[instr.tag];
+
+    if (info & IR_INSTR_INFO_ARG0_IS_VALUE) {
+      instr.arg0 = orig_placement[instr.arg0].new;
+    }
+    if (info & IR_INSTR_INFO_ARG1_IS_VALUE) {
+      instr.arg1 = orig_placement[instr.arg1].new;
+    }
+    if (info & IR_INSTR_INFO_ARG2_IS_VALUE) {
+      instr.arg2 = orig_placement[instr.arg2].new;
+    }
+
+    new_code[out++] = instr;
+
+    if (placement[ref].new < 0) {
+      assert(instr.tag == IR_CONST);
+      ++new_numneg;
+    } else {
+      ++new_numpos;
+    }
+  }
+
+  free(instr_uses - gen->numneg);
+  free(instr_blocks - gen->numneg);
+  free(placement - gen->numneg);
+  free(orig_placement - gen->numneg);
+  free(old_code - gen->numneg);
+
+  assert(out == count);
+  assert(new_numneg + new_numpos == count);
+  gen->code = new_code;
+  gen->numneg = new_numneg;
+  gen->numpos = new_numpos;
+}
+
+
+
+
 void test_irgen_if(void) {
   IrGen *gen = irgen_create();
 
@@ -861,6 +1239,87 @@ void test_irgen_while(void) {
   irgen_fixup_ir(fixed, gen);
   
   irgen_print_ir(fixed);
+
+  irgen_destroy(gen);
+  irgen_destroy(fixed);
+}
+
+void test_nested_while_loops(void) {
+  IrGen *gen = irgen_create();
+
+  // Create variables for outer and inner loop counters
+  IrVarRef i = irgen_create_variable(gen, TY_I32);
+  IrVarRef j = irgen_create_variable(gen, TY_I32);
+
+  // Create all the blocks we'll need
+  IrBlockRef entry_block = irgen_create_block(gen);
+  IrBlockRef outer_cond_block = irgen_create_block(gen);
+  IrBlockRef outer_body_block = irgen_create_block(gen);
+  IrBlockRef inner_cond_block = irgen_create_block(gen);
+  IrBlockRef inner_body_block = irgen_create_block(gen);
+  IrBlockRef exit_block = irgen_create_block(gen);
+
+  // Entry block: initialize i = 0
+  irgen_seal_block(gen, entry_block);
+  irgen_label(gen, entry_block);
+  irgen_write_variable(gen, entry_block, i, irgen_const_i32(gen, 0));
+  irgen_jump(gen, outer_cond_block);
+
+  // Outer condition block: while i < 3
+  irgen_label(gen, outer_cond_block);
+  irgen_branch(gen, 
+    irgen_neq(gen, irgen_read_variable(gen, outer_cond_block, i), irgen_const_i32(gen, 3)),
+    outer_body_block,
+    exit_block
+  );
+  irgen_seal_block(gen, outer_body_block);
+  irgen_seal_block(gen, exit_block);
+
+  // Outer body block: initialize j = 0
+  irgen_label(gen, outer_body_block);
+  irgen_write_variable(gen, outer_body_block, j, irgen_const_i32(gen, 0));
+  irgen_jump(gen, inner_cond_block);
+
+  // Inner condition block: while j < 2
+  irgen_label(gen, inner_cond_block);
+  irgen_branch(gen,
+    irgen_neq(gen, irgen_read_variable(gen, inner_cond_block, j), irgen_const_i32(gen, 2)),
+    inner_body_block,
+    outer_cond_block
+  );
+  irgen_seal_block(gen, inner_body_block);
+  irgen_seal_block(gen, outer_cond_block);
+
+  // Inner body block: print i,j and increment j
+  irgen_label(gen, inner_body_block);
+  irgen_print(gen, irgen_read_variable(gen, inner_body_block, i));
+  irgen_print(gen, irgen_read_variable(gen, inner_body_block, j));
+  irgen_write_variable(gen, inner_body_block, j,
+    irgen_add(gen, irgen_read_variable(gen, inner_body_block, j), irgen_const_i32(gen, 1))
+  );
+  irgen_jump(gen, inner_cond_block);
+  irgen_seal_block(gen, inner_cond_block);
+
+  // After inner loop completes, increment i and continue outer loop
+  irgen_write_variable(gen, outer_body_block, i,
+    irgen_add(gen, irgen_read_variable(gen, outer_body_block, i), irgen_const_i32(gen, 1))
+  );
+
+  // Exit block: return final value of i
+  irgen_label(gen, exit_block);
+  irgen_ret(gen, irgen_read_variable(gen, exit_block, i));
+
+  IrGen *fixed = irgen_create();
+  irgen_fixup_ir(fixed, gen);
+  
+  irgen_print_ir(fixed);
+
+  generate_dominator_tree(fixed);
+  printf("\nDominator tree:\n");
+  for (int i = 1; i < vector_size(fixed->blocks); ++i) {
+    BasicBlock *b = &fixed->blocks[i];
+    printf("Block %d: idom = %d, depth = %d\n", i, b->idom, b->dom_depth);
+  }
 
   irgen_destroy(gen);
   irgen_destroy(fixed);

@@ -19,27 +19,44 @@ typedef enum IrType {
 
 // annotated with types for (arg0[, arg1[, arg2]])
 typedef enum IrInstrTag {
+  // IR_NOP is a no-op instruction, which will be removed later during fixup. replace an instruction with a NOP to remove it from the IR.
   IR_NOP,
-  IR_IDENTITY, // (IrInstrRef replace_with)
 
-  IR_PRINT, // (IrInstrRef value)
+  // IR_IDENTITY is used to replace an instruction with another instruction.
+  // when fixing up the code later, each use of the original (IR_IDENTITY) instruction is replaced with a use of the replacement instruction.
+  IR_IDENTITY, // arguments: (IrInstrRef replace_with)
+
+  IR_PRINT, // arguments: (IrInstrRef value)
   
-  IR_LABEL, // (IrBlockRef block)
+  // IR_LABEL annotates the start of a block
+  IR_LABEL, // arguments: (IrBlockRef block)
 
   // terminals
-  IR_JUMP, // (IrBlockRef target)
-  IR_BRANCH, // (IrInstrRef cond, IrBlockRef true_target, IrBlockRef false_target)
-  IR_RET, // (IrInstrRef value)
+  IR_JUMP, // arguments: (IrBlockRef target)
+  IR_BRANCH, // arguments: (IrInstrRef cond, IrBlockRef true_target, IrBlockRef false_target)
+  IR_RET, // arguments: (IrInstrRef value)
 
-  IR_UPSILON, // (IrPhiRef phi, IrInstrRef value)
-  IR_PHI, // (IrPhiRef phi)
+  // IR_UPSILON instructions are inserted at source blocks, and indicate which value to use for an IR_PHI instruction at the target block
+  // this is slightly different to how phi arguments are usually encoded
+  IR_UPSILON, // arguments: (IrPhiRef phi, IrInstrRef value)
 
-  // all after this point must be pure
+  // IR_PHI instructions are used to merge values from different blocks
+  IR_PHI, // arguments: (IrPhiRef phi)
+
+  // all after this point must be pure instructions
+
+  // constants which have their value stored in the instruction itself
   IR_CONST,
-  IR_ARG, // (IrOperand argument_index)
-  IR_ADD, // (IrInstrRef lhs, IrInstrRef rhs)
-  IR_EQ, // (IrInstrRef lhs, IrInstrRef rhs)
-  IR_NEQ, // (IrInstrRef lhs, IrInstrRef rhs)
+  
+  // IR_ARG instructions represent function arguments
+  IR_ARG, // arguments: (IrOperand argument_index)
+
+  // binary operations
+  IR_ADD, // arguments: (IrInstrRef lhs, IrInstrRef rhs)
+  IR_EQ, // arguments: (IrInstrRef lhs, IrInstrRef rhs)
+  IR_NEQ, // arguments: (IrInstrRef lhs, IrInstrRef rhs)
+
+  IR_NUM_TAGS,
 } IrInstrTag;
 
 #define IR_IS_PURE_INSTR(x) ((x) >= IR_CONST)
