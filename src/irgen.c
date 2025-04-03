@@ -74,7 +74,14 @@ typedef struct BasicBlock {
   u32 visited : 1;
   u32 first : 15;
   u32 last : 15;
+  
+  u32 idom : 16;
+  u32 dom_depth : 16;
+  
+  u32 postorder;
+
   u16 succs[2];
+  
   ListEntry preds;
   ListEntry incomplete_phis;
   ListEntry suffix;
@@ -106,7 +113,7 @@ static void print_instr(IrGen *gen, IrInstrRef ref, IrInstr instr) {
   switch (instr.tag) {
     case IR_NOP: printf("  NOP\n"); break;
     case IR_IDENTITY: printf("  %d = ID %d\n", ref, instr.arg0); break;
-    case IR_PRINT: printf("  %d = PRINT %d\n", ref, instr.arg0); break;
+    case IR_PRINT: printf("  PRINT %d\n", instr.arg0); break;
     case IR_LABEL: printf(":%d\n", instr.arg0); break;
     case IR_JUMP: printf("  JUMP :%d\n", instr.arg0); break;
     case IR_BRANCH: printf("  BRANCH %d :%d :%d\n", instr.arg0, instr.arg1, instr.arg2); break;
@@ -568,6 +575,8 @@ IrInstr irgen_read_variable(IrGen *gen, IrBlockRef block, IrVarRef var) {
 
 
 
+
+
 static void mark_used_instr(IrGen *gen, IrInstrRef ref) {
   IrInstr *instr = gen->code + ref;
   if (instr->flags & IR_FLAG_MARK) {
@@ -760,6 +769,107 @@ void irgen_fixup_ir(IrGen *gen, IrGen *source) {
 }
 
 
+
+
+
+static void generate_postorder(BasicBlock *blocks, IrBlockRef blockref, IrBlockRef **result) {
+  if (blockref) {
+    BasicBlock *b = &blocks[blockref];
+    if (!b->visited) {
+      b->visited = true;
+      generate_postorder(blocks, b->succs[0], result);
+      generate_postorder(blocks, b->succs[1], result);
+      b->postorder = vector_size(*result);
+      vector_push(*result, blockref);
+    }
+  }
+}
+
+static void generate_dominator_tree(IrGen *gen) {
+  BasicBlock *blocks = gen->blocks;
+
+  IrBlockRef *postorder = NULL;
+  generate_postorder(blocks, 1, &postorder);
+  int postorder_size = vector_size(postorder);
+  assert(postorder[postorder_size - 1] == 1); // entry block is always last in postorder
+
+  IrBlockRef *doms = calloc(1, sizeof(IrBlockRef) * postorder_size);
+  for (int i = 0; i < postorder_size; ++i) {
+    doms[i] = -1;
+  }
+  
+  doms[blocks[1].postorder] = blocks[1].postorder;
+  bool changed = true;
+  while (changed) {
+    changed = false;
+    for (int b = postorder_size - 1; b >= 0; --b) {
+      IrBlockRef block = postorder[b];
+      if (block == 1) {
+        continue; // start node
+      }
+      int idom = -1;
+      IrBlockRef source;
+      list_foreach(source, blocks[block].preds, gen->list_entries) {
+        int p = blocks[source].postorder;
+        if (doms[p] < 0) {
+          continue;
+        }
+        if (idom < 0) {
+          idom = p;
+        } else {
+          IrBlockRef f1 = p;
+          IrBlockRef f2 = idom;
+          while (f1 != f2) {
+            while (f1 < f2) {
+              f1 = doms[f1];
+            }
+            while (f2 < f1) {
+              f2 = doms[f2];
+            }
+          }
+          idom = f1;
+        }
+      }
+      if (idom != doms[b]) {
+        doms[b] = idom;
+        changed = true;
+      }
+    }
+  }
+  
+  blocks[1].idom = 0;
+  blocks[1].dom_depth = 0;
+  blocks[1].visited = false;
+  for (int i = postorder_size - 2; i >= 0; --i) { // skip the entry block
+    BasicBlock *b = &blocks[postorder[i]];
+    b->idom = postorder[doms[i]];
+    b->dom_depth = blocks[b->idom].dom_depth + 1;
+    b->visited = false;
+  }
+
+  free(doms);
+  vector_free(postorder);
+}
+
+
+
+/*
+Pure instructions initially have negative indexes in the code array, and their order does not matter.
+Meanwhile, side-effecting instructions have positive indexes, and their order does matter.
+We want to move the pure instructions to the appropriate location at positive indexes, while making sure that
+dependencies are satisfied for the side-effecting instructions, as well as the pure instructions.
+
+Use the dominance information in the BasicBlock struct to help find appropriate placements that dominate all uses.
+*/
+static void schedule_pure_instructions(IrGen *gen) {
+  generate_dominator_tree(gen);
+
+  // TODO: Implement the actual scheduling logic here
+}
+
+
+
+
 void test_irgen_if(void) {
   IrGen *gen = irgen_create();
 
@@ -861,6 +971,87 @@ void test_irgen_while(void) {
   irgen_fixup_ir(fixed, gen);
   
   irgen_print_ir(fixed);
+
+  irgen_destroy(gen);
+  irgen_destroy(fixed);
+}
+
+void test_nested_while_loops(void) {
+  IrGen *gen = irgen_create();
+
+  // Create variables for outer and inner loop counters
+  IrVarRef i = irgen_create_variable(gen, TY_I32);
+  IrVarRef j = irgen_create_variable(gen, TY_I32);
+
+  // Create all the blocks we'll need
+  IrBlockRef entry_block = irgen_create_block(gen);
+  IrBlockRef outer_cond_block = irgen_create_block(gen);
+  IrBlockRef outer_body_block = irgen_create_block(gen);
+  IrBlockRef inner_cond_block = irgen_create_block(gen);
+  IrBlockRef inner_body_block = irgen_create_block(gen);
+  IrBlockRef exit_block = irgen_create_block(gen);
+
+  // Entry block: initialize i = 0
+  irgen_seal_block(gen, entry_block);
+  irgen_label(gen, entry_block);
+  irgen_write_variable(gen, entry_block, i, irgen_const_i32(gen, 0));
+  irgen_jump(gen, outer_cond_block);
+
+  // Outer condition block: while i < 3
+  irgen_label(gen, outer_cond_block);
+  irgen_branch(gen, 
+    irgen_neq(gen, irgen_read_variable(gen, outer_cond_block, i), irgen_const_i32(gen, 3)),
+    outer_body_block,
+    exit_block
+  );
+  irgen_seal_block(gen, outer_body_block);
+  irgen_seal_block(gen, exit_block);
+
+  // Outer body block: initialize j = 0
+  irgen_label(gen, outer_body_block);
+  irgen_write_variable(gen, outer_body_block, j, irgen_const_i32(gen, 0));
+  irgen_jump(gen, inner_cond_block);
+
+  // Inner condition block: while j < 2
+  irgen_label(gen, inner_cond_block);
+  irgen_branch(gen,
+    irgen_neq(gen, irgen_read_variable(gen, inner_cond_block, j), irgen_const_i32(gen, 2)),
+    inner_body_block,
+    outer_cond_block
+  );
+  irgen_seal_block(gen, inner_body_block);
+  irgen_seal_block(gen, outer_cond_block);
+
+  // Inner body block: print i,j and increment j
+  irgen_label(gen, inner_body_block);
+  irgen_print(gen, irgen_read_variable(gen, inner_body_block, i));
+  irgen_print(gen, irgen_read_variable(gen, inner_body_block, j));
+  irgen_write_variable(gen, inner_body_block, j,
+    irgen_add(gen, irgen_read_variable(gen, inner_body_block, j), irgen_const_i32(gen, 1))
+  );
+  irgen_jump(gen, inner_cond_block);
+  irgen_seal_block(gen, inner_cond_block);
+
+  // After inner loop completes, increment i and continue outer loop
+  irgen_write_variable(gen, outer_body_block, i,
+    irgen_add(gen, irgen_read_variable(gen, outer_body_block, i), irgen_const_i32(gen, 1))
+  );
+
+  // Exit block: return final value of i
+  irgen_label(gen, exit_block);
+  irgen_ret(gen, irgen_read_variable(gen, exit_block, i));
+
+  IrGen *fixed = irgen_create();
+  irgen_fixup_ir(fixed, gen);
+  
+  irgen_print_ir(fixed);
+
+  generate_dominator_tree(fixed);
+  printf("\nDominator tree:\n");
+  for (int i = 1; i < vector_size(fixed->blocks); ++i) {
+    BasicBlock *b = &fixed->blocks[i];
+    printf("Block %d: idom = %d, depth = %d\n", i, b->idom, b->dom_depth);
+  }
 
   irgen_destroy(gen);
   irgen_destroy(fixed);

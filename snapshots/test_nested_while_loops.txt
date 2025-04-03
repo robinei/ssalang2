@@ -1,0 +1,36 @@
+  -7 = ADD 11 -6
+  -6 = CONST 1
+  -5 = NEQ 11 -4
+  -4 = CONST 2
+  -3 = NEQ 5 -2
+  -2 = CONST 3
+  -1 = CONST 0
+  NOP
+:1
+  UPSILON [1] -1
+  JUMP :2
+:2
+  5 = PHI [1]
+  BRANCH -3 :3 :6
+:3
+  UPSILON [2] -1
+  JUMP :4
+:4
+  11 = PHI [2]
+  UPSILON [1] 5
+  BRANCH -5 :5 :2
+:5
+  PRINT 5
+  PRINT 11
+  UPSILON [2] -7
+  JUMP :4
+:6
+  RET 5
+
+Dominator tree:
+Block 1: idom = 0, depth = 0
+Block 2: idom = 1, depth = 1
+Block 3: idom = 2, depth = 2
+Block 4: idom = 3, depth = 3
+Block 5: idom = 4, depth = 4
+Block 6: idom = 2, depth = 2
