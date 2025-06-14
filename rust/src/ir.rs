@@ -78,6 +78,40 @@ impl From<VarRef> for RefType {
     }
 }
 
+// Implement Into<RefType> for all ref types (automatically provided by From impls above)
+// Implement From<RefType> for all ref types (fallible conversion)
+impl TryFrom<RefType> for InstrRef {
+    type Error = ();
+    
+    fn try_from(value: RefType) -> Result<Self, Self::Error> {
+        Self::new(value).ok_or(())
+    }
+}
+
+impl TryFrom<RefType> for BlockRef {
+    type Error = ();
+    
+    fn try_from(value: RefType) -> Result<Self, Self::Error> {
+        Self::new(value).ok_or(())
+    }
+}
+
+impl TryFrom<RefType> for PhiRef {
+    type Error = ();
+    
+    fn try_from(value: RefType) -> Result<Self, Self::Error> {
+        Self::new(value).ok_or(())
+    }
+}
+
+impl TryFrom<RefType> for VarRef {
+    type Error = ();
+    
+    fn try_from(value: RefType) -> Result<Self, Self::Error> {
+        Self::new(value).ok_or(())
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Type {
