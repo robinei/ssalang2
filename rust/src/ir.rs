@@ -78,37 +78,32 @@ impl From<VarRef> for RefType {
     }
 }
 
-// Implement Into<RefType> for all ref types (automatically provided by From impls above)
-// Implement From<RefType> for all ref types (fallible conversion)
-impl TryFrom<RefType> for InstrRef {
-    type Error = ();
-    
-    fn try_from(value: RefType) -> Result<Self, Self::Error> {
-        Self::new(value).ok_or(())
+// Implement From<RefType> for all ref types (infallible conversion with assertions)
+impl From<RefType> for InstrRef {
+    fn from(value: RefType) -> Self {
+        assert!(value != 0, "Cannot create InstrRef from zero");
+        Self(std::num::NonZeroI16::new(value).unwrap())
     }
 }
 
-impl TryFrom<RefType> for BlockRef {
-    type Error = ();
-    
-    fn try_from(value: RefType) -> Result<Self, Self::Error> {
-        Self::new(value).ok_or(())
+impl From<RefType> for BlockRef {
+    fn from(value: RefType) -> Self {
+        assert!(value != 0, "Cannot create BlockRef from zero");
+        Self(std::num::NonZeroI16::new(value).unwrap())
     }
 }
 
-impl TryFrom<RefType> for PhiRef {
-    type Error = ();
-    
-    fn try_from(value: RefType) -> Result<Self, Self::Error> {
-        Self::new(value).ok_or(())
+impl From<RefType> for PhiRef {
+    fn from(value: RefType) -> Self {
+        assert!(value != 0, "Cannot create PhiRef from zero");
+        Self(std::num::NonZeroI16::new(value).unwrap())
     }
 }
 
-impl TryFrom<RefType> for VarRef {
-    type Error = ();
-    
-    fn try_from(value: RefType) -> Result<Self, Self::Error> {
-        Self::new(value).ok_or(())
+impl From<RefType> for VarRef {
+    fn from(value: RefType) -> Self {
+        assert!(value != 0, "Cannot create VarRef from zero");
+        Self(std::num::NonZeroI16::new(value).unwrap())
     }
 }
 

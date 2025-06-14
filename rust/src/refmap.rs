@@ -9,7 +9,7 @@ pub struct RefMap<R, T> {
 
 impl<R, T> RefMap<R, T> 
 where 
-    R: Copy + TryFrom<crate::ir::RefType> + Into<crate::ir::RefType>,
+    R: Copy + From<crate::ir::RefType> + Into<crate::ir::RefType>,
     T: Default,
 {
     /// Creates a new RefMap with a default dummy element at index 0
@@ -37,21 +37,19 @@ where
         self.data.push(item);
         let index = self.data.len() as crate::ir::RefType - 1;
         // This should always succeed since we start from 1
-        R::try_from(index).unwrap_or_else(|_| panic!("Failed to create ref from index {}", index))
+        R::from(index)
     }
 
-    /// Gets a reference to an element by its ref, returns None if not present
+    /// Gets a reference to an element by its ref, panics if not present
     /// This does NOT create missing elements
-    pub fn get(&self, r: R) -> Option<&T> {
+    pub fn get(&self, r: R) -> &T {
         let index = r.into() as usize;
-        if index == 0 {
-            return None; // Index 0 is reserved
-        }
-        self.data.get(index)
+        assert!(index > 0, "Cannot access reserved index 0");
+        self.data.get(index).unwrap_or_else(|| panic!("RefMap entry at index {} does not exist", index))
     }
 
-    /// Gets a mutable reference to an element by its ref, creating default elements as needed
-    /// This WILL create missing elements up to the requested index
+    /// Gets a mutable reference to an element by its ref, creating default elements as needed.
+    /// This WILL create missing elements up to the requested index.
     pub fn get_mut(&mut self, r: R) -> &mut T {
         let index = r.into() as usize;
         assert!(index > 0, "Cannot access reserved index 0");
@@ -83,7 +81,7 @@ where
 
 impl<R, T> Default for RefMap<R, T>
 where
-    R: Copy + TryFrom<crate::ir::RefType> + Into<crate::ir::RefType>,
+    R: Copy + From<crate::ir::RefType> + Into<crate::ir::RefType>,
     T: Default,
 {
     fn default() -> Self {
@@ -123,8 +121,8 @@ mod tests {
         assert!(!map.is_empty());
         
         // Should be able to get the items
-        assert_eq!(map.get(ref1).unwrap().value, 42);
-        assert_eq!(map.get(ref2).unwrap().value, 24);
+        assert_eq!(map.get(ref1).value, 42);
+        assert_eq!(map.get(ref2).value, 24);
     }
 
     #[test]
@@ -139,11 +137,11 @@ mod tests {
         item.value = 100;
         
         assert_eq!(map.len(), 5); // Should have created 5 elements
-        assert_eq!(map.get(var_ref).unwrap().value, 100);
+        assert_eq!(map.get(var_ref).value, 100);
         
         // Earlier indices should exist with default values
         let var_ref1 = VarRef::new(1).unwrap();
-        assert_eq!(map.get(var_ref1).unwrap().value, 0); // Default value
+        assert_eq!(map.get(var_ref1).value, 0); // Default value
     }
 
     #[test]
@@ -160,7 +158,7 @@ mod tests {
         
         // Should be able to add new items after clear
         let ref1 = map.push(TestItem::new(42));
-        assert_eq!(map.get(ref1).unwrap().value, 42);
+        assert_eq!(map.get(ref1).value, 42);
     }
 
     #[test]

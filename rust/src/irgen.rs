@@ -130,10 +130,6 @@ impl IrGen {
         self.phis.push(phi)
     }
 
-    fn get_phi(&mut self, phi: PhiRef) -> &mut Phi {
-        self.phis.get_mut(phi)
-    }
-
     fn emit_instr_pinned(&mut self, instr: Instr) -> InstrRef {
         self.code.push_pinned(instr)
     }
@@ -162,12 +158,7 @@ impl IrGen {
         let is_current_block = self.curr_block == Some(block);
         
         // Check if we can emit directly as pinned
-        let can_emit_pinned = {
-            let b = self.blocks.get_mut(block);
-            is_current_block && b.last.is_none()
-        };
-        
-        if can_emit_pinned {
+        if is_current_block && self.blocks.get(block).last.is_none() {
             assert!(!instr.is_pure());
             return self.emit_instr_pinned(instr);
         }
@@ -175,8 +166,7 @@ impl IrGen {
         let instr_ref = self.emit_instr_unpinned(instr);
         
         // Now update the suffix list
-        let b = self.blocks.get_mut(block);
-        b.suffix.push(instr_ref);
+        self.blocks.get_mut(block).suffix.push(instr_ref);
         
         instr_ref
     }
@@ -205,79 +195,54 @@ impl IrGen {
     }
 
     pub fn label(&mut self, block: BlockRef) {
-        assert!(self.curr_block.is_none() || self.blocks.get(self.curr_block.unwrap()).expect("Block should exist").last.is_some());
-        
-        let b = self.blocks.get_mut(block);
-        assert!(b.first.is_none());
-        assert!(b.last.is_none());
-        assert!(b.succs[0].is_none());
-        assert!(b.succs[1].is_none());
-        
-        let instr_ref = self.emit_instr_pinned(Instr::Label(Meta::new(Type::Void), block));
-        let b = self.blocks.get_mut(block);
-        b.first = Some(instr_ref);
-        self.curr_block = Some(block);
-    }
-
-    pub fn jump(&mut self, target: BlockRef) {
-        self.blocks.get_mut(target);
-        
-        let curr_block = self.curr_block.expect("No current block for jump");
-        
-        // Validate current block state
+        assert!(self.curr_block.is_none() || self.blocks.get(self.curr_block.unwrap()).last.is_some());
         {
-            let b = self.blocks.get_mut(curr_block);
-            assert!(b.last.is_none());
-            assert!(b.succs[0].is_none());
-        }
-        
-        // Validate target block state
-        {
-            let tb = self.blocks.get_mut(target);
-            assert!(!tb.sealed);
-        }
-        
-        // Update current block successor
-        {
-            let b = self.blocks.get_mut(curr_block);
-            b.succs[0] = Some(target);
-        }
-        
-        // Update target block predecessor
-        {
-            let tb = self.blocks.get_mut(target);
-            tb.preds.push(curr_block);
-        }
-        
-        // Emit jump instruction and update current block
-        let jump_instr = self.emit_instr_pinned(Instr::Jump(Meta::new(Type::Void), target));
-        let b = self.blocks.get_mut(curr_block);
-        b.last = Some(jump_instr);
-    }
-
-    pub fn branch(&mut self, cond: Instr, true_target: BlockRef, false_target: BlockRef) {
-        self.blocks.get_mut(true_target);
-        self.blocks.get_mut(false_target);
-        
-        let curr_block = self.curr_block.expect("No current block for branch");
-        
-        // Validate state
-        {
-            let b = self.blocks.get_mut(curr_block);
+            let b = self.blocks.get(block);
+            assert!(b.first.is_none());
             assert!(b.last.is_none());
             assert!(b.succs[0].is_none());
             assert!(b.succs[1].is_none());
         }
         
+        let instr_ref = self.emit_instr_pinned(Instr::Label(Meta::new(Type::Void), block));
+        self.blocks.get_mut(block).first = Some(instr_ref);
+        self.curr_block = Some(block);
+    }
+
+    pub fn jump(&mut self, target: BlockRef) {
+        self.blocks.get_mut(target);
+
+        let curr_block = self.curr_block.expect("No current block for jump");
+        
         {
-            let tb = self.blocks.get_mut(true_target);
+            let b = self.blocks.get(curr_block);
+            let tb = self.blocks.get(target);
+            assert!(b.last.is_none());
+            assert!(b.succs[0].is_none());
             assert!(!tb.sealed);
         }
-        {
-            let fb = self.blocks.get_mut(false_target);
-            assert!(!fb.sealed);
-        }
         
+        let jump_instr = self.emit_instr_pinned(Instr::Jump(Meta::new(Type::Void), target));
+        
+        self.blocks.get_mut(target).preds.push(curr_block);
+
+        let b = self.blocks.get_mut(curr_block);
+        b.succs[0] = Some(target);
+        b.last = Some(jump_instr);
+    }
+
+    pub fn branch(&mut self, cond: Instr, true_target: BlockRef, false_target: BlockRef) {
+        let curr_block = self.curr_block.expect("No current block for branch");
+        
+        // Validate state
+        {
+            let b = self.blocks.get(curr_block);
+            assert!(b.last.is_none());
+            assert!(b.succs[0].is_none());
+            assert!(b.succs[1].is_none());
+        }
+        assert!(!self.blocks.get_mut(true_target).sealed);
+        assert!(!self.blocks.get_mut(false_target).sealed);
         assert_eq!(cond.get_type(), Type::Bool);
         
         // Optimize constant branches
@@ -291,74 +256,46 @@ impl IrGen {
             self.jump(true_target);
             return;
         }
-        
-        // Update successors
-        {
-            let b = self.blocks.get_mut(curr_block);
-            b.succs[0] = Some(true_target);
-            b.succs[1] = Some(false_target);
-        }
-        
-        // Update predecessors
-        {
-            let tb = self.blocks.get_mut(true_target);
-            tb.preds.push(curr_block);
-        }
-        {
-            let fb = self.blocks.get_mut(false_target);
-            fb.preds.push(curr_block);
-        }
-        
+
         let cond_ref = self.intern_instr(cond);
         let branch_instr = self.emit_instr_pinned(Instr::Branch(Meta::new(Type::Void), cond_ref, true_target, false_target));
+        
+        self.blocks.get_mut(true_target).preds.push(curr_block);
+        self.blocks.get_mut(false_target).preds.push(curr_block);
+
         let b = self.blocks.get_mut(curr_block);
+        b.succs[0] = Some(true_target);
+        b.succs[1] = Some(false_target);
         b.last = Some(branch_instr);
     }
 
     pub fn ret(&mut self, retval: Instr) {
         let curr_block = self.curr_block.expect("No current block for ret");
-        
-        // Validate state
-        {
-            let b = self.blocks.get_mut(curr_block);
-            assert!(b.last.is_none());
-        }
+        assert!(self.blocks.get(curr_block).last.is_none());
         
         let retval_ref = self.intern_instr(retval);
         let ret_instr = self.emit_instr_pinned(Instr::Ret(Meta::new(Type::Void), retval_ref));
-        let b = self.blocks.get_mut(curr_block);
-        b.last = Some(ret_instr);
+        self.blocks.get_mut(curr_block).last = Some(ret_instr);
     }
 
     pub fn upsilon(&mut self, block: BlockRef, phi: PhiRef, val: Instr) {
-        if phi.get() != 0 {
-            let val_ref = self.intern_instr(val);
-            let instr_ref = self.append_block_instr(
-                block,
-                Instr::Upsilon(Meta::new(Type::Void), phi, val_ref)
-            );
-            
-            // Update phi upsilons list
-            let p = self.get_phi(phi);
-            p.upsilons.push(instr_ref);
-        }
+        let val_ref = self.intern_instr(val);
+        let instr_ref = self.append_block_instr(
+            block,
+            Instr::Upsilon(Meta::new(Type::Void), phi, val_ref)
+        );
+        
+        self.phis.get_mut(phi).upsilons.push(instr_ref);
     }
 
     pub fn phi(&mut self, phi: PhiRef, ty: Type) -> Instr {
-        if phi.get() != 0 {
-            let p = self.get_phi(phi);
-            assert_ne!(ty, Type::Void);
-            assert!(p.instr.is_none());
-            
-            let instr_ref = self.emit_instr_pinned(Instr::Phi(Meta::new(ty), phi));
-            let p = self.get_phi(phi);
-            p.instr = Some(instr_ref);
-            
-            Instr::Identity(Meta::new(ty), instr_ref)
-        } else {
-            assert_eq!(ty, Type::Void);
-            Instr::nop()
-        }
+        assert_ne!(ty, Type::Void);
+        assert!(self.phis.get_mut(phi).instr.is_none());
+        
+        let instr_ref = self.emit_instr_pinned(Instr::Phi(Meta::new(ty), phi));
+        self.phis.get_mut(phi).instr = Some(instr_ref);
+        
+        Instr::Identity(Meta::new(ty), instr_ref)
     }
 
     pub fn arg(&self, arg: i32, ty: Type) -> Instr {
@@ -429,7 +366,7 @@ impl IrGen {
 
     pub fn seal_block(&mut self, block: BlockRef) {
         {
-            let b = self.blocks.get(block).expect("Block should exist");
+            let b = self.blocks.get(block);
             assert!(!b.sealed);
         }
         
@@ -458,15 +395,15 @@ impl IrGen {
         assert!(block.get() != 0);
         assert!(phi.get() != 0);
         
-        let var = self.phis.get(phi).expect("Phi should exist").var.expect("Phi should have associated variable");
-        let phi_instr_ref = self.phis.get(phi).expect("Phi should exist").instr.expect("Phi should have instruction");
+        let var = self.phis.get(phi).var.expect("Phi should have associated variable");
+        let phi_instr_ref = self.phis.get(phi).instr.expect("Phi should have instruction");
         let phi_instr = self.to_instr(phi_instr_ref);
         
         let mut found_different = false;
         let mut candidate = Instr::nop();
         
         // Collect values from all predecessors
-        let pred_list = self.blocks.get(block).expect("Block should exist").preds.clone();
+        let pred_list = self.blocks.get(block).preds.clone();
         for pred in pred_list {
             let val = self.read_variable(pred, var);
             
@@ -502,7 +439,7 @@ impl IrGen {
         assert!(block.get() != 0);
         assert!(var.get() != 0);
         assert_ne!(val.get_type(), Type::Void);
-        assert_eq!(val.get_type(), self.vars.get(var).expect("Variable should exist").ty);
+        assert_eq!(val.get_type(), self.vars.get(var).ty);
         
         let key = ((block.get() as u32) << 16) | (var.get() as u32);
         self.bindings.insert(key, val);
@@ -511,7 +448,7 @@ impl IrGen {
     pub fn read_variable(&mut self, block: BlockRef, var: VarRef) -> Instr {
         assert!(block.get() != 0);
         assert!(var.get() != 0);
-        assert_ne!(self.vars.get(var).expect("Variable should exist").ty, Type::Void);
+        assert_ne!(self.vars.get(var).ty, Type::Void);
         
         let key = ((block.get() as u32) << 16) | (var.get() as u32);
         
@@ -519,8 +456,8 @@ impl IrGen {
             return *val;
         }
         
-        let var_type = self.vars.get(var).expect("Variable should exist").ty;
-        let is_sealed = self.blocks.get(block).expect("Block should exist").sealed;
+        let var_type = self.vars.get(var).ty;
+        let is_sealed = self.blocks.get(block).sealed;
         
         let result = if !is_sealed {
             // Create incomplete phi
@@ -531,7 +468,7 @@ impl IrGen {
             }
             self.phi(phi, var_type)
         } else {
-            let pred_list = self.blocks.get(block).expect("Block should exist").preds.clone();
+            let pred_list = self.blocks.get(block).preds.clone();
             if pred_list.len() == 1 && pred_list[0].get() != 0 {
                 // Exactly one predecessor
                 self.read_variable(pred_list[0], var)
@@ -713,7 +650,7 @@ mod tests {
         gen.seal_block(block2);
         
         // Verify that block2's preds contains block1
-        let block2_bb = gen.blocks.get(block2).expect("Block should exist");
+        let block2_bb = gen.blocks.get(block2);
         assert_eq!(block2_bb.preds.len(), 1);
         assert_eq!(block2_bb.preds[0], block1);
         

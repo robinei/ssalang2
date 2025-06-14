@@ -1,9 +1,19 @@
 # SSA Compiler
 
-## Building
+This project is the beginnings of a compiler based on an SSA intermediate representation.
+There is an original C version, as well as a Rust port which we are currently developing.
+Assume that we will not be modifying any C code, or in any way needing to run the root directory Makefile or Python scripts.
+
+## Rust version
+The `rust` subfolder contains the Rust version, which we are porting from the C version.
+
+## C version
+The root directory contains the original C implementation.
+
+### Building
 Run `make` here in the roor repo directory to build the project.
 
-## Testing
+### Testing
 Run `make test` to run the test suite. Will build the project if necessary.
 
 The test suite is simply all exported functions which have a `test_` prefix.
@@ -14,7 +24,7 @@ When a test fails the snapshot diff is printed on the lines following the line w
 The diffs are generated with the Python difflib library, and will have usual `-` and `+` prefixed lines,
 as well as ignorable `?` prefixed lines which show hints about what changed on the adjacent line.
 
-## Debugging segfaults or memory problems
+### Debugging segfaults or memory problems
 Use valgrind to debug for example specific test failures caused by memory issues:
 ```
 valgrind ./bin/compiler --run-test test_instruction_scheduling
