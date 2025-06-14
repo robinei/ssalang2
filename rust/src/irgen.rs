@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use crate::ir::{Instr, Meta, Type, InstrRef, BlockRef, PhiRef, VarRef, Operand};
-use crate::bivec::BiVec;
+use crate::code::Code;
 
 #[derive(Debug)]
 struct Variable {
@@ -61,7 +61,7 @@ impl Phi {
 
 #[derive(Debug)]
 pub struct IrGen {
-    code: BiVec<Instr>,
+    code: Code,
     curr_block: Option<BlockRef>,
     blocks: Vec<BasicBlock>,
     vars: Vec<Variable>,
@@ -73,7 +73,7 @@ pub struct IrGen {
 impl IrGen {
     pub fn new() -> Self {
         let mut gen = Self {
-            code: BiVec::with_capacity(16, 16),
+            code: Code::with_capacity(16, 16),
             curr_block: None,
             blocks: Vec::new(),
             vars: Vec::new(),
@@ -81,9 +81,6 @@ impl IrGen {
             bindings: HashMap::new(),
             ircache: HashMap::new(),
         };
-        
-        // Reserve slot 0 for NOP
-        gen.code.set_with_default(0, Instr::Nop(Meta::new(Type::Void)));
         
         // Reserve index 0 for unused entries
         gen.create_block(); // block at index 0 should not be used
@@ -94,8 +91,7 @@ impl IrGen {
     }
 
     pub fn clear(&mut self) {
-        self.code = BiVec::with_capacity(16, 16);
-        self.code.set_with_default(0, Instr::Nop(Meta::new(Type::Void)));
+        self.code = Code::with_capacity(16, 16);
         self.curr_block = None;
         self.blocks.clear();
         self.vars.clear();
@@ -154,9 +150,7 @@ impl IrGen {
     }
 
     fn emit_instr_pinned(&mut self, instr: Instr) -> InstrRef {
-        let ref_val = self.code.positive_count() as Operand;
-        self.code.push(instr);
-        InstrRef::new(ref_val).expect("Instruction ref should be non-zero")
+        self.code.push_pinned(instr)
     }
 
     fn try_lookup_instr(&self, instr: &Instr) -> Option<InstrRef> {
@@ -170,9 +164,7 @@ impl IrGen {
             }
         }
 
-        let ref_val = -(self.code.negative_count() as Operand + 1);
-        let instr_ref = InstrRef::new(ref_val).expect("Instruction ref should be non-zero");
-        self.code.push_front(instr);
+        let instr_ref = self.code.push_unpinned(instr);
         
         if instr.is_pure() {
             self.ircache.insert(instr, instr_ref);
@@ -205,7 +197,7 @@ impl IrGen {
     }
 
     fn to_instr(&self, instr_ref: InstrRef) -> Instr {
-        let instr = self.code[instr_ref.get() as isize];
+        let instr = self.code[instr_ref];
         match instr {
             Instr::ConstBool(..) | Instr::ConstI32(..) | Instr::Identity(..) => instr,
             _ => Instr::Identity(Meta::new(instr.get_type()), instr_ref),
@@ -380,7 +372,7 @@ impl IrGen {
             Instr::Identity(Meta::new(ty), instr_ref)
         } else {
             assert_eq!(ty, Type::Void);
-            Instr::Nop(Meta::new(Type::Void))
+            Instr::nop()
         }
     }
 
@@ -485,7 +477,7 @@ impl IrGen {
         let phi_instr = self.to_instr(phi_instr_ref);
         
         let mut found_different = false;
-        let mut candidate = Instr::Nop(Meta::new(Type::Void));
+        let mut candidate = Instr::nop();
         
         // Collect values from all predecessors
         let pred_list = self.blocks[block.get() as usize - 1].preds.clone();
@@ -509,7 +501,7 @@ impl IrGen {
         if candidate.get_type() != Type::Void && !found_different {
             // All values are the same, replace phi with identity
             let candidate_ref = self.intern_instr(candidate);
-            self.code[phi_instr_ref.get() as isize] = Instr::Identity(Meta::new(candidate.get_type()), candidate_ref);
+            self.code.set(phi_instr_ref, Instr::Identity(Meta::new(candidate.get_type()), candidate_ref));
             return candidate;
         }
         
@@ -661,5 +653,33 @@ mod tests {
         // Test that equal instructions map to same key
         let instr1_copy = Instr::ConstI32(Meta::new(Type::I32), 42);
         assert_eq!(map.get(&instr1_copy), Some(&ref1));
+    }
+
+    #[test]
+    fn test_code_invariants() {
+        let gen = IrGen::new();
+        
+        // Verify index 0 contains Nop
+        match gen.code[0] {
+            Instr::Nop(_) => (),
+            _ => panic!("Index 0 should always contain Nop"),
+        }
+        
+        // Test that emitted instructions get valid refs
+        let mut gen = IrGen::new();
+        let entry_block = gen.create_block();
+        gen.seal_block(entry_block);
+        gen.label(entry_block);
+        
+        // Emit some instructions
+        let const_instr = gen.const_i32(42);
+        let add_result = gen.add(const_instr, const_instr);
+        gen.ret(add_result);
+        
+        // Verify we have user instructions (more than 0, since Nop doesn't count)
+        assert!(gen.code.pinned_count() > 0);
+        
+        // Verify we can access the Nop safely
+        assert_eq!(gen.code[0].get_type(), Type::Void);
     }
 }

@@ -179,11 +179,16 @@ impl Instr {
     pub fn is_marked(&self) -> bool {
         self.get_meta().is_marked()
     }
+
+    /// Creates a Nop instruction (no operation)
+    pub fn nop() -> Self {
+        Self::Nop(Meta::new(Type::Void))
+    }
 }
 
 impl Default for Instr {
     fn default() -> Self {
-        Self::Nop(Meta::new(Type::Void))
+        Self::nop()
     }
 }
 
@@ -341,5 +346,20 @@ mod tests {
         // Test equality and hashing work
         assert_eq!(InstrRef::new(42).unwrap(), InstrRef::new(42).unwrap());
         assert_ne!(InstrRef::new(42).unwrap(), InstrRef::new(43).unwrap());
+    }
+
+    #[test]
+    fn test_nop_constructor() {
+        let nop = Instr::nop();
+        assert_eq!(nop.get_type(), Type::Void);
+        assert!(!nop.is_pure());
+        assert!(!nop.is_terminal());
+        
+        // Test that Default trait uses nop constructor
+        let default_instr = Instr::default();
+        assert_eq!(default_instr.get_type(), Type::Void);
+        
+        // Verify they're the same
+        assert_eq!(nop, default_instr);
     }
 }

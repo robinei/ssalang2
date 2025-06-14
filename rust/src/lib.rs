@@ -3,4 +3,4 @@ pub mod ir;
 pub mod astgen;
 pub mod irgen;
 pub mod compile;
-pub mod bivec;
+pub mod code;
