@@ -1,4 +1,4 @@
-use crate::ir::{Instr, InstrRef, Meta, Type, Operand};
+use crate::ir::{Instr, InstrRef, Operand};
 use std::ops::{Index, IndexMut};
 
 /// A specialized instruction storage that maintains SSA invariants.
@@ -255,7 +255,7 @@ mod tests {
     #[test]
     fn test_push_pinned() {
         let mut code = Code::new();
-        let instr = Instr::ConstI32(Meta::new(Type::I32), 42);
+        let instr = Instr::const_i32(42);
         let instr_ref = code.push_pinned(instr);
         
         assert_eq!(instr_ref.get(), 1);
@@ -266,7 +266,7 @@ mod tests {
     #[test]
     fn test_push_unpinned() {
         let mut code = Code::new();
-        let instr = Instr::ConstBool(Meta::new(Type::Bool), true);
+        let instr = Instr::const_bool(true);
         let instr_ref = code.push_unpinned(instr);
         
         assert_eq!(instr_ref.get(), -1);
@@ -277,8 +277,8 @@ mod tests {
     #[test]
     fn test_set_instruction() {
         let mut code = Code::new();
-        let instr_ref = code.push_pinned(Instr::ConstI32(Meta::new(Type::I32), 10));
-        let new_instr = Instr::ConstI32(Meta::new(Type::I32), 20);
+        let instr_ref = code.push_pinned(Instr::const_i32(10));
+        let new_instr = Instr::const_i32(20);
         
         code.set(instr_ref, new_instr);
         assert_eq!(code[instr_ref], new_instr);
@@ -290,7 +290,7 @@ mod tests {
         // Since InstrRef uses NonZeroI16, we can't create a reference to index 0
         // Instead, test that direct indexing with isize panics
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            code[0] = Instr::ConstI32(Meta::new(Type::I32), 42);
+            code[0] = Instr::const_i32(42);
         }));
         assert!(result.is_err());
     }
@@ -298,8 +298,8 @@ mod tests {
     #[test]
     fn test_clear_preserves_nop() {
         let mut code = Code::new();
-        code.push_pinned(Instr::ConstI32(Meta::new(Type::I32), 42));
-        code.push_unpinned(Instr::ConstBool(Meta::new(Type::Bool), true));
+        code.push_pinned(Instr::const_i32(42));
+        code.push_unpinned(Instr::const_bool(true));
         
         code.clear();
         
@@ -314,8 +314,8 @@ mod tests {
     #[test]
     fn test_iter_with_refs() {
         let mut code = Code::new();
-        let pos_ref = code.push_pinned(Instr::ConstI32(Meta::new(Type::I32), 10));
-        let neg_ref = code.push_unpinned(Instr::ConstBool(Meta::new(Type::Bool), true));
+        let pos_ref = code.push_pinned(Instr::const_i32(10));
+        let neg_ref = code.push_unpinned(Instr::const_bool(true));
         
         let items: Vec<_> = code.iter_with_refs().collect();
         assert_eq!(items.len(), 2); // 1 positive + 1 negative (skip index 0)

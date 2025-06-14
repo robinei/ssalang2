@@ -302,7 +302,7 @@ impl IrGen {
         }
         
         // Optimize same target branches
-        if true_target.get() == false_target.get() {
+        if true_target == false_target {
             self.jump(true_target);
             return;
         }
@@ -376,15 +376,7 @@ impl IrGen {
         }
     }
 
-    pub fn const_bool(&self, val: bool) -> Instr {
-        Instr::ConstBool(Meta::new(Type::Bool), val)
-    }
-
-    pub fn const_i32(&self, val: i32) -> Instr {
-        Instr::ConstI32(Meta::new(Type::I32), val)
-    }
-
-    pub fn arg(&self, arg: Operand, ty: Type) -> Instr {
+    pub fn arg(&self, arg: i32, ty: Type) -> Instr {
         assert!(arg >= 0);
         assert_ne!(ty, Type::Void);
         Instr::Arg(Meta::new(ty), arg)
@@ -394,8 +386,17 @@ impl IrGen {
         assert_eq!(lhs.get_type(), rhs.get_type());
         
         // Constant folding
-        if let (Instr::ConstI32(_, lval), Instr::ConstI32(_, rval)) = (lhs, rhs) {
-            return Instr::ConstI32(Meta::new(Type::I32), lval.wrapping_add(rval));
+        match (lhs, rhs) {
+            (Instr::ConstI32(_, lval), Instr::ConstI32(_, rval)) => {
+                return Instr::const_i32(lval.wrapping_add(rval));
+            }
+            (Instr::ConstI32(_, 0), _) => {
+                return rhs;
+            }
+            (_, Instr::ConstI32(_, 0)) => {
+                return lhs;
+            }
+            _ => {}
         }
         
         let lhs_ref = self.intern_instr(lhs);
@@ -409,10 +410,10 @@ impl IrGen {
         // Constant folding
         match (lhs, rhs) {
             (Instr::ConstBool(_, lval), Instr::ConstBool(_, rval)) => {
-                return Instr::ConstBool(Meta::new(Type::Bool), lval == rval);
+                return Instr::const_bool(lval == rval);
             }
             (Instr::ConstI32(_, lval), Instr::ConstI32(_, rval)) => {
-                return Instr::ConstBool(Meta::new(Type::Bool), lval == rval);
+                return Instr::const_bool(lval == rval);
             }
             _ => {}
         }
@@ -428,10 +429,10 @@ impl IrGen {
         // Constant folding
         match (lhs, rhs) {
             (Instr::ConstBool(_, lval), Instr::ConstBool(_, rval)) => {
-                return Instr::ConstBool(Meta::new(Type::Bool), lval != rval);
+                return Instr::const_bool(lval != rval);
             }
             (Instr::ConstI32(_, lval), Instr::ConstI32(_, rval)) => {
-                return Instr::ConstBool(Meta::new(Type::Bool), lval != rval);
+                return Instr::const_bool(lval != rval);
             }
             _ => {}
         }
@@ -585,7 +586,7 @@ mod tests {
         gen.label(entry_block);
         
         // Create a simple computation: return 5 + 5
-        let const5 = gen.const_i32(5);
+        let const5 = Instr::const_i32(5);
         let add_result = gen.add(const5, const5);
         gen.ret(add_result);
         
@@ -603,7 +604,7 @@ mod tests {
         gen.seal_block(block);
         
         // Write and read variable
-        let val = gen.const_i32(42);
+        let val = Instr::const_i32(42);
         gen.write_variable(block, var, val);
         let read_val = gen.read_variable(block, var);
         
@@ -638,8 +639,8 @@ mod tests {
         let mut map: HashMap<Instr, InstrRef> = HashMap::new();
         
         // Test that instructions can be used as keys
-        let instr1 = Instr::ConstI32(Meta::new(Type::I32), 42);
-        let instr2 = Instr::ConstBool(Meta::new(Type::Bool), true);
+        let instr1 = Instr::const_i32(42);
+        let instr2 = Instr::const_bool(true);
         let ref1 = InstrRef::new(1).unwrap();
         let ref2 = InstrRef::new(2).unwrap();
         
@@ -651,7 +652,7 @@ mod tests {
         assert_eq!(map.get(&instr2), Some(&ref2));
         
         // Test that equal instructions map to same key
-        let instr1_copy = Instr::ConstI32(Meta::new(Type::I32), 42);
+        let instr1_copy = Instr::const_i32(42);
         assert_eq!(map.get(&instr1_copy), Some(&ref1));
     }
 
@@ -672,7 +673,7 @@ mod tests {
         gen.label(entry_block);
         
         // Emit some instructions
-        let const_instr = gen.const_i32(42);
+        let const_instr = Instr::const_i32(42);
         let add_result = gen.add(const_instr, const_instr);
         gen.ret(add_result);
         
@@ -681,5 +682,33 @@ mod tests {
         
         // Verify we can access the Nop safely
         assert_eq!(gen.code[0].get_type(), Type::Void);
+    }
+
+    #[test]
+    fn test_add_zero_optimization() {
+        let mut gen = IrGen::new();
+        
+        let zero = Instr::const_i32(0);
+        let two = Instr::const_i32(2);
+        let three = Instr::const_i32(3);
+        let arg = gen.arg(0, Type::I32);
+        
+        let result1 = gen.add(zero, arg);
+        match result1 {
+            Instr::Arg(_, arg_idx) => assert_eq!(arg_idx, 0),
+            _ => panic!("Expected arg instruction, got {:?}", result1),
+        }
+        
+        let result2 = gen.add(arg, zero);
+        match result2 {
+            Instr::Arg(_, arg_idx) => assert_eq!(arg_idx, 0),
+            _ => panic!("Expected arg instruction, got {:?}", result2),
+        }
+        
+        let result3 = gen.add(two, three);
+        match result3 {
+            Instr::ConstI32(_, val) => assert_eq!(val, 5),
+            _ => panic!("Expected constant 5, got {:?}", result3),
+        }
     }
 }

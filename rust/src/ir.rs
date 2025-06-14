@@ -122,21 +122,39 @@ pub enum Instr {
     Nop(Meta),
     Identity(Meta, InstrRef),
     Print(Meta, InstrRef),
+
+    // CFG instructions
     Label(Meta, BlockRef),
     Jump(Meta, BlockRef),
     Branch(Meta, InstrRef, BlockRef, BlockRef),
     Ret(Meta, InstrRef),
+
+    // SSA annotations
     Upsilon(Meta, PhiRef, InstrRef),
     Phi(Meta, PhiRef),
+
+    // Pure instructions
     ConstBool(Meta, bool),
     ConstI32(Meta, i32),
-    Arg(Meta, Operand),
+    Arg(Meta, i32),
     Add(Meta, InstrRef, InstrRef),
     Eq(Meta, InstrRef, InstrRef),
     Neq(Meta, InstrRef, InstrRef),
 }
 
 impl Instr {
+    pub fn nop() -> Self {
+        Self::Nop(Meta::new(Type::Void))
+    }
+
+    pub fn const_bool(value: bool) -> Self {
+        Self::ConstBool(Meta::new(Type::Bool), value)
+    }
+
+    pub fn const_i32(value: i32) -> Self {
+        Self::ConstI32(Meta::new(Type::I32), value)
+    }
+    
     pub fn is_pure(&self) -> bool {
         matches!(self,
             Self::ConstBool(..) | 
@@ -178,11 +196,6 @@ impl Instr {
 
     pub fn is_marked(&self) -> bool {
         self.get_meta().is_marked()
-    }
-
-    /// Creates a Nop instruction (no operation)
-    pub fn nop() -> Self {
-        Self::Nop(Meta::new(Type::Void))
     }
 }
 
