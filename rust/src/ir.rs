@@ -1,62 +1,80 @@
+use std::num::NonZeroI16;
+
 pub type Operand = i16;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct InstrRef(pub Operand);
+pub struct InstrRef(pub NonZeroI16);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct BlockRef(pub Operand);
+pub struct BlockRef(pub NonZeroI16);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct PhiRef(pub Operand);
+pub struct PhiRef(pub NonZeroI16);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct VarRef(pub Operand);
+pub struct VarRef(pub NonZeroI16);
 
-impl From<Operand> for InstrRef {
-    fn from(value: Operand) -> Self {
-        Self(value)
+impl InstrRef {
+    pub fn new(value: Operand) -> Option<Self> {
+        NonZeroI16::new(value).map(Self)
+    }
+
+    pub fn get(self) -> Operand {
+        self.0.get()
+    }
+}
+
+impl BlockRef {
+    pub fn new(value: Operand) -> Option<Self> {
+        NonZeroI16::new(value).map(Self)
+    }
+
+    pub fn get(self) -> Operand {
+        self.0.get()
+    }
+}
+
+impl PhiRef {
+    pub fn new(value: Operand) -> Option<Self> {
+        NonZeroI16::new(value).map(Self)
+    }
+
+    pub fn get(self) -> Operand {
+        self.0.get()
+    }
+}
+
+impl VarRef {
+    pub fn new(value: Operand) -> Option<Self> {
+        NonZeroI16::new(value).map(Self)
+    }
+
+    pub fn get(self) -> Operand {
+        self.0.get()
     }
 }
 
 impl From<InstrRef> for Operand {
     fn from(value: InstrRef) -> Self {
-        value.0
-    }
-}
-
-impl From<Operand> for BlockRef {
-    fn from(value: Operand) -> Self {
-        Self(value)
+        value.get()
     }
 }
 
 impl From<BlockRef> for Operand {
     fn from(value: BlockRef) -> Self {
-        value.0
-    }
-}
-
-impl From<Operand> for PhiRef {
-    fn from(value: Operand) -> Self {
-        Self(value)
+        value.get()
     }
 }
 
 impl From<PhiRef> for Operand {
     fn from(value: PhiRef) -> Self {
-        value.0
-    }
-}
-
-impl From<Operand> for VarRef {
-    fn from(value: Operand) -> Self {
-        Self(value)
+        value.get()
     }
 }
 
 impl From<VarRef> for Operand {
     fn from(value: VarRef) -> Self {
-        value.0
+        value.get()
     }
 }
 
@@ -269,8 +287,8 @@ mod tests {
         
         let add = Instr::Add(
             Meta::new(Type::I32),
-            InstrRef(1),
-            InstrRef(2),
+            InstrRef::new(1).unwrap(),
+            InstrRef::new(2).unwrap(),
         );
         
         assert!(add.is_pure());
@@ -280,7 +298,7 @@ mod tests {
         
         let jump = Instr::Jump(
             Meta::new(Type::Void),
-            BlockRef(5),
+            BlockRef::new(5).unwrap(),
         );
         
         assert!(!jump.is_pure());
@@ -288,21 +306,34 @@ mod tests {
     }
 
     #[test]
+    fn test_niche_optimization() {
+        // Test that Option<Ref> has the same size as Ref due to niche optimization
+        assert_eq!(std::mem::size_of::<InstrRef>(), std::mem::size_of::<Option<InstrRef>>());
+        assert_eq!(std::mem::size_of::<BlockRef>(), std::mem::size_of::<Option<BlockRef>>());
+        assert_eq!(std::mem::size_of::<PhiRef>(), std::mem::size_of::<Option<PhiRef>>());
+        assert_eq!(std::mem::size_of::<VarRef>(), std::mem::size_of::<Option<VarRef>>());
+        
+        // All should be 2 bytes (the size of i16)
+        assert_eq!(std::mem::size_of::<InstrRef>(), 2);
+        assert_eq!(std::mem::size_of::<Option<InstrRef>>(), 2);
+    }
+
+    #[test]
     fn test_ref_types() {
-        let instr_ref = InstrRef::from(42);
+        let instr_ref = InstrRef::new(42).unwrap();
         assert_eq!(Operand::from(instr_ref), 42);
-        assert_eq!(instr_ref.0, 42);
+        assert_eq!(instr_ref.get(), 42);
         
-        let block_ref = BlockRef::from(-1);
+        let block_ref = BlockRef::new(-1).unwrap();
         assert_eq!(Operand::from(block_ref), -1);
-        assert_eq!(block_ref.0, -1);
+        assert_eq!(block_ref.get(), -1);
         
-        let phi_ref = PhiRef::from(100);
+        let phi_ref = PhiRef::new(100).unwrap();
         assert_eq!(Operand::from(phi_ref), 100);
-        assert_eq!(phi_ref.0, 100);
+        assert_eq!(phi_ref.get(), 100);
         
         // Test equality and hashing work
-        assert_eq!(InstrRef(42), InstrRef(42));
-        assert_ne!(InstrRef(42), InstrRef(43));
+        assert_eq!(InstrRef::new(42).unwrap(), InstrRef::new(42).unwrap());
+        assert_ne!(InstrRef::new(42).unwrap(), InstrRef::new(43).unwrap());
     }
 }

@@ -110,53 +110,53 @@ impl IrGen {
     }
 
     pub fn create_block(&mut self) -> BlockRef {
-        let block_id = self.blocks.len() as Operand;
         self.blocks.push(BasicBlock::new());
-        BlockRef(block_id)
+        let block_id = self.blocks.len() as Operand;
+        BlockRef::new(block_id).expect("Block ID should be non-zero")
     }
 
     fn get_or_create_block(&mut self, block: BlockRef) -> &mut BasicBlock {
-        while self.blocks.len() <= block.0 as usize {
+        while self.blocks.len() < block.get() as usize {
             self.create_block();
         }
-        &mut self.blocks[block.0 as usize]
+        &mut self.blocks[block.get() as usize - 1]
     }
 
     fn get_block(&self, block: BlockRef) -> &BasicBlock {
-        &self.blocks[block.0 as usize]
+        &self.blocks[block.get() as usize - 1]
     }
 
     pub fn create_variable(&mut self, ty: Type) -> VarRef {
-        let var_id = self.vars.len() as Operand;
         self.vars.push(Variable { ty });
-        VarRef(var_id)
+        let var_id = self.vars.len() as Operand;
+        VarRef::new(var_id).expect("Variable ID should be non-zero")
     }
 
     pub fn create_phi(&mut self) -> PhiRef {
-        let phi_id = self.phis.len() as Operand;
         self.phis.push(Phi::new());
-        PhiRef(phi_id)
+        let phi_id = self.phis.len() as Operand;
+        PhiRef::new(phi_id).expect("Phi ID should be non-zero")
     }
 
     fn create_phi_var(&mut self, var: VarRef) -> PhiRef {
-        let phi_id = self.phis.len() as Operand;
         let mut phi = Phi::new();
         phi.var = Some(var);
         self.phis.push(phi);
-        PhiRef(phi_id)
+        let phi_id = self.phis.len() as Operand;
+        PhiRef::new(phi_id).expect("Phi ID should be non-zero")
     }
 
     fn get_phi(&mut self, phi: PhiRef) -> &mut Phi {
-        while self.phis.len() <= phi.0 as usize {
+        while self.phis.len() < phi.get() as usize {
             self.create_phi();
         }
-        &mut self.phis[phi.0 as usize]
+        &mut self.phis[phi.get() as usize - 1]
     }
 
     fn emit_instr_pinned(&mut self, instr: Instr) -> InstrRef {
         let ref_val = self.code.positive_count() as Operand;
         self.code.push(instr);
-        InstrRef(ref_val)
+        InstrRef::new(ref_val).expect("Instruction ref should be non-zero")
     }
 
     fn try_lookup_instr(&self, instr: &Instr) -> Option<InstrRef> {
@@ -179,13 +179,13 @@ impl IrGen {
                 (meta.get_type() as u64) << 32 | (*arg as u32 as u64) | (0x1000u64 << 32)
             }
             Instr::Add(meta, lhs, rhs) => {
-                (meta.get_type() as u64) << 48 | (lhs.0 as u32 as u64) << 16 | (rhs.0 as u32 as u64) | (0x2000u64 << 32)
+                (meta.get_type() as u64) << 48 | (lhs.get() as u32 as u64) << 16 | (rhs.get() as u32 as u64) | (0x2000u64 << 32)
             }
             Instr::Eq(meta, lhs, rhs) => {
-                (meta.get_type() as u64) << 48 | (lhs.0 as u32 as u64) << 16 | (rhs.0 as u32 as u64) | (0x3000u64 << 32)
+                (meta.get_type() as u64) << 48 | (lhs.get() as u32 as u64) << 16 | (rhs.get() as u32 as u64) | (0x3000u64 << 32)
             }
             Instr::Neq(meta, lhs, rhs) => {
-                (meta.get_type() as u64) << 48 | (lhs.0 as u32 as u64) << 16 | (rhs.0 as u32 as u64) | (0x4000u64 << 32)
+                (meta.get_type() as u64) << 48 | (lhs.get() as u32 as u64) << 16 | (rhs.get() as u32 as u64) | (0x4000u64 << 32)
             }
             _ => 0, // Non-pure instructions don't get cached
         }
@@ -203,10 +203,10 @@ impl IrGen {
         
         if instr.is_pure() {
             let hash = self.hash_instr(&instr);
-            self.ircache.insert(hash, InstrRef(ref_val));
+            self.ircache.insert(hash, InstrRef::new(ref_val).expect("Instruction ref should be non-zero"));
         }
         
-        InstrRef(ref_val)
+        InstrRef::new(ref_val).expect("Instruction ref should be non-zero")
     }
 
     fn append_block_instr(&mut self, block: BlockRef, instr: Instr) -> InstrRef {
@@ -227,17 +227,13 @@ impl IrGen {
         
         // Now update the suffix list
         let b = self.get_or_create_block(block);
-        b.suffix.push(instr_ref.0);
+        b.suffix.push(instr_ref.get());
         
         instr_ref
     }
 
     fn to_instr(&self, instr_ref: InstrRef) -> Instr {
-        if instr_ref.0 == 0 {
-            return Instr::Nop(Meta::new(Type::Void));
-        }
-        
-        let instr = self.code[instr_ref.0 as isize];
+        let instr = self.code[instr_ref.get() as isize];
         match instr {
             Instr::ConstBool(..) | Instr::ConstI32(..) | Instr::Identity(..) => instr,
             _ => Instr::Identity(Meta::new(instr.get_type()), instr_ref),
@@ -301,7 +297,7 @@ impl IrGen {
         // Update target block predecessor
         {
             let tb = self.get_or_create_block(target);
-            tb.preds.push(curr_block.0);
+            tb.preds.push(curr_block.get());
         }
         
         // Emit jump instruction and update current block
@@ -342,7 +338,7 @@ impl IrGen {
         }
         
         // Optimize same target branches
-        if true_target.0 == false_target.0 {
+        if true_target.get() == false_target.get() {
             self.jump(true_target);
             return;
         }
@@ -357,11 +353,11 @@ impl IrGen {
         // Update predecessors
         {
             let tb = self.get_or_create_block(true_target);
-            tb.preds.push(curr_block.0);
+            tb.preds.push(curr_block.get());
         }
         {
             let fb = self.get_or_create_block(false_target);
-            fb.preds.push(curr_block.0);
+            fb.preds.push(curr_block.get());
         }
         
         let cond_ref = self.intern_instr(cond);
@@ -386,7 +382,7 @@ impl IrGen {
     }
 
     pub fn upsilon(&mut self, block: BlockRef, phi: PhiRef, val: Instr) {
-        if phi.0 != 0 {
+        if phi.get() != 0 {
             let val_ref = self.intern_instr(val);
             let instr_ref = self.append_block_instr(
                 block,
@@ -395,12 +391,12 @@ impl IrGen {
             
             // Update phi upsilons list
             let p = self.get_phi(phi);
-            p.upsilons.push(instr_ref.0);
+            p.upsilons.push(instr_ref.get());
         }
     }
 
     pub fn phi(&mut self, phi: PhiRef, ty: Type) -> Instr {
-        if phi.0 != 0 {
+        if phi.get() != 0 {
             let p = self.get_phi(phi);
             assert_ne!(ty, Type::Void);
             assert!(p.instr.is_none());
@@ -501,7 +497,7 @@ impl IrGen {
         
         // Process incomplete phis
         for phi_ref in incomplete_phis {
-            self.create_pred_upsilons(block, PhiRef(phi_ref));
+            self.create_pred_upsilons(block, PhiRef::new(phi_ref).expect("Phi ref should be non-zero"));
         }
     }
 
@@ -509,20 +505,20 @@ impl IrGen {
         let mut preds = Vec::new();
         let mut values = Vec::new();
         
-        assert!(block.0 != 0);
-        assert!(phi.0 != 0);
+        assert!(block.get() != 0);
+        assert!(phi.get() != 0);
         
-        let var = self.phis[phi.0 as usize].var.expect("Phi should have associated variable");
-        let phi_instr_ref = self.phis[phi.0 as usize].instr.expect("Phi should have instruction");
+        let var = self.phis[phi.get() as usize - 1].var.expect("Phi should have associated variable");
+        let phi_instr_ref = self.phis[phi.get() as usize - 1].instr.expect("Phi should have instruction");
         let phi_instr = self.to_instr(phi_instr_ref);
         
         let mut found_different = false;
         let mut candidate = Instr::Nop(Meta::new(Type::Void));
         
         // Collect values from all predecessors
-        let pred_list = self.blocks[block.0 as usize].preds.clone();
+        let pred_list = self.blocks[block.get() as usize - 1].preds.clone();
         for pred_ref in pred_list {
-            let pred = BlockRef(pred_ref);
+            let pred = BlockRef::new(pred_ref).expect("Predecessor should be non-zero");
             let val = self.read_variable(pred, var);
             
             preds.push(pred);
@@ -543,7 +539,7 @@ impl IrGen {
         if candidate.get_type() != Type::Void && !found_different {
             // All values are the same, replace phi with identity
             let candidate_ref = self.intern_instr(candidate);
-            self.code[phi_instr_ref.0 as isize] = Instr::Identity(Meta::new(candidate.get_type()), candidate_ref);
+            self.code[phi_instr_ref.get() as isize] = Instr::Identity(Meta::new(candidate.get_type()), candidate_ref);
             return candidate;
         }
         
@@ -556,22 +552,22 @@ impl IrGen {
     }
 
     pub fn write_variable(&mut self, block: BlockRef, var: VarRef, val: Instr) {
-        assert!(block.0 != 0);
-        assert!(var.0 != 0);
+        assert!(block.get() != 0);
+        assert!(var.get() != 0);
         assert_ne!(val.get_type(), Type::Void);
-        assert_eq!(val.get_type(), self.vars[var.0 as usize].ty);
+        assert_eq!(val.get_type(), self.vars[var.get() as usize - 1].ty);
         
-        let key = ((block.0 as u32) << 16) | (var.0 as u32);
+        let key = ((block.get() as u32) << 16) | (var.get() as u32);
         let val_hash = self.hash_instr(&val);
         self.bindings.insert(key, val_hash);
     }
 
     pub fn read_variable(&mut self, block: BlockRef, var: VarRef) -> Instr {
-        assert!(block.0 != 0);
-        assert!(var.0 != 0);
-        assert_ne!(self.vars[var.0 as usize].ty, Type::Void);
+        assert!(block.get() != 0);
+        assert!(var.get() != 0);
+        assert_ne!(self.vars[var.get() as usize - 1].ty, Type::Void);
         
-        let key = ((block.0 as u32) << 16) | (var.0 as u32);
+        let key = ((block.get() as u32) << 16) | (var.get() as u32);
         
         if let Some(val_hash) = self.bindings.get(&key) {
             // Find instruction by hash (simplified - should use proper reverse lookup)
@@ -584,22 +580,22 @@ impl IrGen {
             return self.reconstruct_instr_from_hash(*val_hash);
         }
         
-        let var_type = self.vars[var.0 as usize].ty;
-        let is_sealed = self.blocks[block.0 as usize].sealed;
+        let var_type = self.vars[var.get() as usize - 1].ty;
+        let is_sealed = self.blocks[block.get() as usize - 1].sealed;
         
         let result = if !is_sealed {
             // Create incomplete phi
             let phi = self.create_phi_var(var);
             {
                 let b = self.get_or_create_block(block);
-                b.incomplete_phis.push(phi.0);
+                b.incomplete_phis.push(phi.get());
             }
             self.phi(phi, var_type)
         } else {
-            let pred_list = self.blocks[block.0 as usize].preds.clone();
+            let pred_list = self.blocks[block.get() as usize - 1].preds.clone();
             if pred_list.len() == 1 && pred_list[0] != 0 {
                 // Exactly one predecessor
-                self.read_variable(BlockRef(pred_list[0]), var)
+                self.read_variable(BlockRef::new(pred_list[0]).expect("Predecessor should be non-zero"), var)
             } else {
                 // Multiple predecessors - create phi
                 let phi = self.create_phi_var(var);
