@@ -163,6 +163,12 @@ impl Instr {
     }
 }
 
+impl Default for Instr {
+    fn default() -> Self {
+        Self::Nop(Meta::new(Type::Void))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
