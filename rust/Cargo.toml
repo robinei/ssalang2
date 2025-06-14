@@ -8,3 +8,4 @@ name = "compiler"
 path = "src/main.rs"
 
 [dependencies]
+smallvec = { version = "1.13", features = ["union"] }

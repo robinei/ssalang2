@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use smallvec::SmallVec;
 use crate::ir::{Instr, Meta, Type, InstrRef, BlockRef, PhiRef, VarRef};
 use crate::code::Code;
 use crate::refmap::RefMap;
@@ -25,9 +26,9 @@ struct BasicBlock {
     postorder: u16,
     loop_depth: u16,
     succs: [Option<BlockRef>; 2],
-    preds: Vec<BlockRef>,
-    incomplete_phis: Vec<PhiRef>,
-    suffix: Vec<InstrRef>,
+    preds: SmallVec<[BlockRef; 8]>,
+    incomplete_phis: SmallVec<[PhiRef; 8]>,
+    suffix: SmallVec<[InstrRef; 8]>,
 }
 
 impl BasicBlock {
@@ -42,9 +43,9 @@ impl BasicBlock {
             postorder: 0,
             loop_depth: 0,
             succs: [None; 2],
-            preds: Vec::new(),
-            incomplete_phis: Vec::new(),
-            suffix: Vec::new(),
+            preds: SmallVec::new(),
+            incomplete_phis: SmallVec::new(),
+            suffix: SmallVec::new(),
         }
     }
 }
@@ -59,7 +60,7 @@ impl Default for BasicBlock {
 struct Phi {
     var: Option<VarRef>,
     instr: Option<InstrRef>,
-    upsilons: Vec<InstrRef>,
+    upsilons: SmallVec<[InstrRef; 8]>,
 }
 
 impl Phi {
@@ -67,7 +68,7 @@ impl Phi {
         Self {
             var: None,
             instr: None,
-            upsilons: Vec::new(),
+            upsilons: SmallVec::new(),
         }
     }
 }
@@ -85,7 +86,7 @@ pub struct IrGen {
     blocks: RefMap<BlockRef, BasicBlock>,
     vars: RefMap<VarRef, Variable>,
     phis: RefMap<PhiRef, Phi>,
-    bindings: HashMap<u32, Instr>,
+    bindings: HashMap<(BlockRef, VarRef), Instr>,
     ircache: HashMap<Instr, InstrRef>,
 }
 
@@ -117,6 +118,7 @@ impl IrGen {
     }
 
     pub fn create_variable(&mut self, ty: Type) -> VarRef {
+        assert_ne!(ty, Type::Void);
         self.vars.push(Variable { ty })
     }
 
@@ -365,38 +367,24 @@ impl IrGen {
     }
 
     pub fn seal_block(&mut self, block: BlockRef) {
-        {
-            let b = self.blocks.get(block);
-            assert!(!b.sealed);
-        }
-        
-        // Get incomplete phis before sealing
-        let incomplete_phis: Vec<_> = {
+        let incomplete_phis: SmallVec<[PhiRef; 8]> = {
             let b = self.blocks.get_mut(block);
+            assert!(!b.sealed);
+            b.sealed = true;
             b.incomplete_phis.clone()
         };
         
-        // Now seal the block
-        {
-            let b = self.blocks.get_mut(block);
-            b.sealed = true;
-        }
-        
-        // Process incomplete phis
         for phi_ref in incomplete_phis {
             self.create_pred_upsilons(block, phi_ref);
         }
     }
 
     fn create_pred_upsilons(&mut self, block: BlockRef, phi: PhiRef) -> Instr {
-        let mut preds = Vec::new();
-        let mut values = Vec::new();
-        
-        assert!(block.get() != 0);
-        assert!(phi.get() != 0);
+        let mut preds: SmallVec<[BlockRef; 8]> = SmallVec::new();
+        let mut values: SmallVec<[Instr; 8]> = SmallVec::new();
         
         let var = self.phis.get(phi).var.expect("Phi should have associated variable");
-        let phi_instr_ref = self.phis.get(phi).instr.expect("Phi should have instruction");
+        let phi_instr_ref = self.phis.get(phi).instr.expect("Phi should have assoiated instruction");
         let phi_instr = self.to_instr(phi_instr_ref);
         
         let mut found_different = false;
@@ -441,18 +429,11 @@ impl IrGen {
         assert_ne!(val.get_type(), Type::Void);
         assert_eq!(val.get_type(), self.vars.get(var).ty);
         
-        let key = ((block.get() as u32) << 16) | (var.get() as u32);
-        self.bindings.insert(key, val);
+        self.bindings.insert((block, var), val);
     }
 
     pub fn read_variable(&mut self, block: BlockRef, var: VarRef) -> Instr {
-        assert!(block.get() != 0);
-        assert!(var.get() != 0);
-        assert_ne!(self.vars.get(var).ty, Type::Void);
-        
-        let key = ((block.get() as u32) << 16) | (var.get() as u32);
-        
-        if let Some(val) = self.bindings.get(&key) {
+        if let Some(val) = self.bindings.get(&(block, var)) {
             return *val;
         }
         
@@ -658,6 +639,22 @@ mod tests {
         for pred_block in &block2_bb.preds {
             assert!(pred_block.get() > 0); // Should be a valid block reference
         }
+    }
+
+    #[test]
+    fn test_binding_key_sizes() {
+        // Test that tuple key has same size as u32 key
+        let tuple_size = std::mem::size_of::<(BlockRef, VarRef)>();
+        let u32_size = std::mem::size_of::<u32>();
+        
+        println!("Tuple (BlockRef, VarRef) size: {} bytes", tuple_size);
+        println!("u32 size: {} bytes", u32_size);
+        
+        assert_eq!(tuple_size, u32_size, "Tuple key should be same size as u32 key");
+        
+        // Also verify individual ref sizes
+        assert_eq!(std::mem::size_of::<BlockRef>(), 2);
+        assert_eq!(std::mem::size_of::<VarRef>(), 2);
     }
 
     #[test]

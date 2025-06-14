@@ -92,7 +92,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::{BlockRef, VarRef, PhiRef};
+    use crate::ir::{BlockRef, VarRef};
 
     #[derive(Debug, Default, Clone, PartialEq)]
     struct TestItem {
