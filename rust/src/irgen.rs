@@ -66,8 +66,8 @@ pub struct IrGen {
     blocks: Vec<BasicBlock>,
     vars: Vec<Variable>,
     phis: Vec<Phi>,
-    bindings: HashMap<u32, u64>,
-    ircache: HashMap<u64, InstrRef>,
+    bindings: HashMap<u32, Instr>,
+    ircache: HashMap<Instr, InstrRef>,
 }
 
 impl IrGen {
@@ -160,35 +160,7 @@ impl IrGen {
     }
 
     fn try_lookup_instr(&self, instr: &Instr) -> Option<InstrRef> {
-        // Create a hash representation of the instruction
-        let hash = self.hash_instr(instr);
-        self.ircache.get(&hash).copied()
-    }
-
-    fn hash_instr(&self, instr: &Instr) -> u64 {
-        // Simple hash based on instruction discriminant and operands
-        // This is a simplified version - in practice you'd want a proper hash
-        match instr {
-            Instr::ConstBool(meta, val) => {
-                (meta.get_type() as u64) << 32 | (*val as u64)
-            }
-            Instr::ConstI32(meta, val) => {
-                (meta.get_type() as u64) << 32 | (*val as u32 as u64)
-            }
-            Instr::Arg(meta, arg) => {
-                (meta.get_type() as u64) << 32 | (*arg as u32 as u64) | (0x1000u64 << 32)
-            }
-            Instr::Add(meta, lhs, rhs) => {
-                (meta.get_type() as u64) << 48 | (lhs.get() as u32 as u64) << 16 | (rhs.get() as u32 as u64) | (0x2000u64 << 32)
-            }
-            Instr::Eq(meta, lhs, rhs) => {
-                (meta.get_type() as u64) << 48 | (lhs.get() as u32 as u64) << 16 | (rhs.get() as u32 as u64) | (0x3000u64 << 32)
-            }
-            Instr::Neq(meta, lhs, rhs) => {
-                (meta.get_type() as u64) << 48 | (lhs.get() as u32 as u64) << 16 | (rhs.get() as u32 as u64) | (0x4000u64 << 32)
-            }
-            _ => 0, // Non-pure instructions don't get cached
-        }
+        self.ircache.get(instr).copied()
     }
 
     fn emit_instr_unpinned(&mut self, instr: Instr) -> InstrRef {
@@ -199,14 +171,14 @@ impl IrGen {
         }
 
         let ref_val = -(self.code.negative_count() as Operand + 1);
+        let instr_ref = InstrRef::new(ref_val).expect("Instruction ref should be non-zero");
         self.code.push_front(instr);
         
         if instr.is_pure() {
-            let hash = self.hash_instr(&instr);
-            self.ircache.insert(hash, InstrRef::new(ref_val).expect("Instruction ref should be non-zero"));
+            self.ircache.insert(instr, instr_ref);
         }
         
-        InstrRef::new(ref_val).expect("Instruction ref should be non-zero")
+        instr_ref
     }
 
     fn append_block_instr(&mut self, block: BlockRef, instr: Instr) -> InstrRef {
@@ -524,12 +496,10 @@ impl IrGen {
             preds.push(pred);
             values.push(val);
             
-            let phi_hash = self.hash_instr(&phi_instr);
-            let val_hash = self.hash_instr(&val);
-            if val_hash != phi_hash {
+            if val != phi_instr {
                 if candidate.get_type() == Type::Void {
                     candidate = val;
-                } else if self.hash_instr(&candidate) != val_hash {
+                } else if candidate != val {
                     found_different = true;
                 }
             }
@@ -558,8 +528,7 @@ impl IrGen {
         assert_eq!(val.get_type(), self.vars[var.get() as usize - 1].ty);
         
         let key = ((block.get() as u32) << 16) | (var.get() as u32);
-        let val_hash = self.hash_instr(&val);
-        self.bindings.insert(key, val_hash);
+        self.bindings.insert(key, val);
     }
 
     pub fn read_variable(&mut self, block: BlockRef, var: VarRef) -> Instr {
@@ -569,15 +538,8 @@ impl IrGen {
         
         let key = ((block.get() as u32) << 16) | (var.get() as u32);
         
-        if let Some(val_hash) = self.bindings.get(&key) {
-            // Find instruction by hash (simplified - should use proper reverse lookup)
-            for (_idx, instr) in self.code.iter_with_indices() {
-                if self.hash_instr(instr) == *val_hash {
-                    return *instr;
-                }
-            }
-            // Fallback for constants
-            return self.reconstruct_instr_from_hash(*val_hash);
+        if let Some(val) = self.bindings.get(&key) {
+            return *val;
         }
         
         let var_type = self.vars[var.get() as usize - 1].ty;
@@ -609,29 +571,6 @@ impl IrGen {
         result
     }
 
-    fn reconstruct_instr_from_hash(&self, hash: u64) -> Instr {
-        // Reconstruct constant instructions from hash
-        let ty_val = (hash >> 32) & 0xFFFF;
-        let ty = match ty_val & 0x7F {
-            0 => Type::Void,
-            1 => Type::Bool,
-            2 => Type::I32,
-            _ => Type::Void,
-        };
-        
-        let opcode = (hash >> 48) & 0xFFFF;
-        match opcode {
-            0x0000 => {
-                // Constant
-                match ty {
-                    Type::Bool => Instr::ConstBool(Meta::new(Type::Bool), (hash & 1) != 0),
-                    Type::I32 => Instr::ConstI32(Meta::new(Type::I32), (hash & 0xFFFFFFFF) as i32),
-                    _ => Instr::Nop(Meta::new(Type::Void)),
-                }
-            }
-            _ => Instr::Nop(Meta::new(Type::Void)),
-        }
-    }
 }
 
 impl Default for IrGen {
@@ -698,5 +637,29 @@ mod tests {
             }
             _ => panic!("Expected identity instruction"),
         }
+    }
+
+    #[test] 
+    fn test_instr_as_hashmap_key() {
+        use std::collections::HashMap;
+        
+        let mut map: HashMap<Instr, InstrRef> = HashMap::new();
+        
+        // Test that instructions can be used as keys
+        let instr1 = Instr::ConstI32(Meta::new(Type::I32), 42);
+        let instr2 = Instr::ConstBool(Meta::new(Type::Bool), true);
+        let ref1 = InstrRef::new(1).unwrap();
+        let ref2 = InstrRef::new(2).unwrap();
+        
+        map.insert(instr1, ref1);
+        map.insert(instr2, ref2);
+        
+        // Test lookup
+        assert_eq!(map.get(&instr1), Some(&ref1));
+        assert_eq!(map.get(&instr2), Some(&ref2));
+        
+        // Test that equal instructions map to same key
+        let instr1_copy = Instr::ConstI32(Meta::new(Type::I32), 42);
+        assert_eq!(map.get(&instr1_copy), Some(&ref1));
     }
 }

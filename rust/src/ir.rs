@@ -86,7 +86,7 @@ pub enum Type {
     I32 = 2,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Meta(u8);
 
 impl Meta {
@@ -116,7 +116,7 @@ impl Meta {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum Instr {
     Nop(Meta),
