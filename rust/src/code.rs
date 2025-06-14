@@ -1,4 +1,4 @@
-use crate::ir::{Instr, InstrRef, Operand};
+use crate::ir::{Instr, InstrRef, RefType};
 use std::ops::{Index, IndexMut};
 
 /// A specialized instruction storage that maintains SSA invariants.
@@ -49,7 +49,7 @@ impl Code {
     /// Pushes a pinned instruction and returns its InstrRef.
     /// Pinned instructions get positive indices and execute in order.
     pub fn push_pinned(&mut self, instr: Instr) -> InstrRef {
-        let ref_val = self.positive.len() as Operand;
+        let ref_val = self.positive.len() as RefType;
         self.positive.push(instr);
         InstrRef::new(ref_val).expect("Instruction ref should be non-zero")
     }
@@ -57,7 +57,7 @@ impl Code {
     /// Pushes an unpinned instruction and returns its InstrRef.
     /// Unpinned instructions get negative indices and can be reordered.
     pub fn push_unpinned(&mut self, instr: Instr) -> InstrRef {
-        let ref_val = -(self.negative.len() as Operand + 1);
+        let ref_val = -(self.negative.len() as RefType + 1);
         self.negative.push(instr);
         InstrRef::new(ref_val).expect("Instruction ref should be non-zero")
     }
@@ -220,7 +220,7 @@ impl<'a> Iterator for CodeIterator<'a> {
             return self.next();
         }
         
-        let instr_ref = InstrRef::new(index as Operand)?;
+        let instr_ref = InstrRef::new(index as RefType)?;
         
         let instr = if index < 0 {
             // Negative index: convert to array index

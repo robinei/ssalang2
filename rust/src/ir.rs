@@ -1,78 +1,78 @@
 use std::num::NonZeroI16;
 
-pub type Operand = i16;
+pub type RefType = i16;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct InstrRef(pub NonZeroI16);
+pub struct InstrRef(NonZeroI16);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct BlockRef(pub NonZeroI16);
+pub struct BlockRef(NonZeroI16);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct PhiRef(pub NonZeroI16);
+pub struct PhiRef(NonZeroI16);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct VarRef(pub NonZeroI16);
+pub struct VarRef(NonZeroI16);
 
 impl InstrRef {
-    pub fn new(value: Operand) -> Option<Self> {
+    pub fn new(value: RefType) -> Option<Self> {
         NonZeroI16::new(value).map(Self)
     }
 
-    pub fn get(self) -> Operand {
+    pub fn get(self) -> RefType {
         self.0.get()
     }
 }
 
 impl BlockRef {
-    pub fn new(value: Operand) -> Option<Self> {
+    pub fn new(value: RefType) -> Option<Self> {
         NonZeroI16::new(value).map(Self)
     }
 
-    pub fn get(self) -> Operand {
+    pub fn get(self) -> RefType {
         self.0.get()
     }
 }
 
 impl PhiRef {
-    pub fn new(value: Operand) -> Option<Self> {
+    pub fn new(value: RefType) -> Option<Self> {
         NonZeroI16::new(value).map(Self)
     }
 
-    pub fn get(self) -> Operand {
+    pub fn get(self) -> RefType {
         self.0.get()
     }
 }
 
 impl VarRef {
-    pub fn new(value: Operand) -> Option<Self> {
+    pub fn new(value: RefType) -> Option<Self> {
         NonZeroI16::new(value).map(Self)
     }
 
-    pub fn get(self) -> Operand {
+    pub fn get(self) -> RefType {
         self.0.get()
     }
 }
 
-impl From<InstrRef> for Operand {
+impl From<InstrRef> for RefType {
     fn from(value: InstrRef) -> Self {
         value.get()
     }
 }
 
-impl From<BlockRef> for Operand {
+impl From<BlockRef> for RefType {
     fn from(value: BlockRef) -> Self {
         value.get()
     }
 }
 
-impl From<PhiRef> for Operand {
+impl From<PhiRef> for RefType {
     fn from(value: PhiRef) -> Self {
         value.get()
     }
 }
 
-impl From<VarRef> for Operand {
+impl From<VarRef> for RefType {
     fn from(value: VarRef) -> Self {
         value.get()
     }
@@ -212,10 +212,10 @@ mod tests {
     #[test]
     fn test_instr_size() {
         // With packed Meta (1 byte), the largest variant (Branch) needs:
-        // tag(1) + meta(1) + 3*Operand(6) = 8 bytes
+        // tag(1) + meta(1) + 3*RefType(6) = 8 bytes
         assert_eq!(std::mem::size_of::<Instr>(), 8);
         assert_eq!(std::mem::size_of::<Meta>(), 1);
-        assert_eq!(std::mem::size_of::<Operand>(), 2);
+        assert_eq!(std::mem::size_of::<RefType>(), 2);
     }
 
     #[test]
@@ -345,15 +345,15 @@ mod tests {
     #[test]
     fn test_ref_types() {
         let instr_ref = InstrRef::new(42).unwrap();
-        assert_eq!(Operand::from(instr_ref), 42);
+        assert_eq!(RefType::from(instr_ref), 42);
         assert_eq!(instr_ref.get(), 42);
         
         let block_ref = BlockRef::new(-1).unwrap();
-        assert_eq!(Operand::from(block_ref), -1);
+        assert_eq!(RefType::from(block_ref), -1);
         assert_eq!(block_ref.get(), -1);
         
         let phi_ref = PhiRef::new(100).unwrap();
-        assert_eq!(Operand::from(phi_ref), 100);
+        assert_eq!(RefType::from(phi_ref), 100);
         assert_eq!(phi_ref.get(), 100);
         
         // Test equality and hashing work

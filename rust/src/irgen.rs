@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use crate::ir::{Instr, Meta, Type, InstrRef, BlockRef, PhiRef, VarRef, Operand};
+use crate::ir::{Instr, Meta, Type, InstrRef, BlockRef, PhiRef, VarRef, RefType};
 use crate::code::Code;
 
 #[derive(Debug)]
@@ -18,9 +18,9 @@ struct BasicBlock {
     postorder: u16,
     loop_depth: u16,
     succs: [Option<BlockRef>; 2],
-    preds: Vec<Operand>,
-    incomplete_phis: Vec<Operand>,
-    suffix: Vec<Operand>,
+    preds: Vec<BlockRef>,
+    incomplete_phis: Vec<PhiRef>,
+    suffix: Vec<InstrRef>,
 }
 
 impl BasicBlock {
@@ -46,7 +46,7 @@ impl BasicBlock {
 struct Phi {
     var: Option<VarRef>,
     instr: Option<InstrRef>,
-    upsilons: Vec<Operand>,
+    upsilons: Vec<InstrRef>,
 }
 
 impl Phi {
@@ -107,7 +107,7 @@ impl IrGen {
 
     pub fn create_block(&mut self) -> BlockRef {
         self.blocks.push(BasicBlock::new());
-        let block_id = self.blocks.len() as Operand;
+        let block_id = self.blocks.len() as RefType;
         BlockRef::new(block_id).expect("Block ID should be non-zero")
     }
 
@@ -124,13 +124,13 @@ impl IrGen {
 
     pub fn create_variable(&mut self, ty: Type) -> VarRef {
         self.vars.push(Variable { ty });
-        let var_id = self.vars.len() as Operand;
+        let var_id = self.vars.len() as RefType;
         VarRef::new(var_id).expect("Variable ID should be non-zero")
     }
 
     pub fn create_phi(&mut self) -> PhiRef {
         self.phis.push(Phi::new());
-        let phi_id = self.phis.len() as Operand;
+        let phi_id = self.phis.len() as RefType;
         PhiRef::new(phi_id).expect("Phi ID should be non-zero")
     }
 
@@ -138,7 +138,7 @@ impl IrGen {
         let mut phi = Phi::new();
         phi.var = Some(var);
         self.phis.push(phi);
-        let phi_id = self.phis.len() as Operand;
+        let phi_id = self.phis.len() as RefType;
         PhiRef::new(phi_id).expect("Phi ID should be non-zero")
     }
 
@@ -191,7 +191,7 @@ impl IrGen {
         
         // Now update the suffix list
         let b = self.get_or_create_block(block);
-        b.suffix.push(instr_ref.get());
+        b.suffix.push(instr_ref);
         
         instr_ref
     }
@@ -261,7 +261,7 @@ impl IrGen {
         // Update target block predecessor
         {
             let tb = self.get_or_create_block(target);
-            tb.preds.push(curr_block.get());
+            tb.preds.push(curr_block);
         }
         
         // Emit jump instruction and update current block
@@ -317,11 +317,11 @@ impl IrGen {
         // Update predecessors
         {
             let tb = self.get_or_create_block(true_target);
-            tb.preds.push(curr_block.get());
+            tb.preds.push(curr_block);
         }
         {
             let fb = self.get_or_create_block(false_target);
-            fb.preds.push(curr_block.get());
+            fb.preds.push(curr_block);
         }
         
         let cond_ref = self.intern_instr(cond);
@@ -355,7 +355,7 @@ impl IrGen {
             
             // Update phi upsilons list
             let p = self.get_phi(phi);
-            p.upsilons.push(instr_ref.get());
+            p.upsilons.push(instr_ref);
         }
     }
 
@@ -462,7 +462,7 @@ impl IrGen {
         
         // Process incomplete phis
         for phi_ref in incomplete_phis {
-            self.create_pred_upsilons(block, PhiRef::new(phi_ref).expect("Phi ref should be non-zero"));
+            self.create_pred_upsilons(block, phi_ref);
         }
     }
 
@@ -482,8 +482,7 @@ impl IrGen {
         
         // Collect values from all predecessors
         let pred_list = self.blocks[block.get() as usize - 1].preds.clone();
-        for pred_ref in pred_list {
-            let pred = BlockRef::new(pred_ref).expect("Predecessor should be non-zero");
+        for pred in pred_list {
             let val = self.read_variable(pred, var);
             
             preds.push(pred);
@@ -543,14 +542,14 @@ impl IrGen {
             let phi = self.create_phi_var(var);
             {
                 let b = self.get_or_create_block(block);
-                b.incomplete_phis.push(phi.get());
+                b.incomplete_phis.push(phi);
             }
             self.phi(phi, var_type)
         } else {
             let pred_list = self.blocks[block.get() as usize - 1].preds.clone();
-            if pred_list.len() == 1 && pred_list[0] != 0 {
+            if pred_list.len() == 1 && pred_list[0].get() != 0 {
                 // Exactly one predecessor
-                self.read_variable(BlockRef::new(pred_list[0]).expect("Predecessor should be non-zero"), var)
+                self.read_variable(pred_list[0], var)
             } else {
                 // Multiple predecessors - create phi
                 let phi = self.create_phi_var(var);
@@ -709,6 +708,72 @@ mod tests {
         match result3 {
             Instr::ConstI32(_, val) => assert_eq!(val, 5),
             _ => panic!("Expected constant 5, got {:?}", result3),
+        }
+    }
+
+    #[test]
+    fn test_block_ref_type_safety() {
+        let mut gen = IrGen::new();
+        
+        // Create two blocks
+        let block1 = gen.create_block();
+        let block2 = gen.create_block();
+        
+        // Seal and label first block
+        gen.seal_block(block1);
+        gen.label(block1);
+        
+        // Jump to second block - this should populate predecessors correctly
+        gen.jump(block2);
+        gen.seal_block(block2);
+        
+        // Verify that block2's preds contains block1
+        let block2_bb = &gen.blocks[block2.get() as usize - 1];
+        assert_eq!(block2_bb.preds.len(), 1);
+        assert_eq!(block2_bb.preds[0], block1);
+        
+        // Test that we can read the BlockRef values without conversion
+        for pred_block in &block2_bb.preds {
+            assert!(pred_block.get() > 0); // Should be a valid block reference
+        }
+    }
+
+    #[test]
+    fn test_phi_upsilons_type_safety() {
+        let mut gen = IrGen::new();
+        
+        // Create variable and blocks for phi creation
+        let var = gen.create_variable(Type::I32);
+        let block1 = gen.create_block();
+        let block2 = gen.create_block();
+        let block3 = gen.create_block();
+        
+        // Set up a scenario that will create phi nodes
+        gen.seal_block(block1);
+        gen.label(block1);
+        gen.write_variable(block1, var, Instr::const_i32(10));
+        gen.jump(block3);
+        
+        gen.seal_block(block2);
+        gen.label(block2);
+        gen.write_variable(block2, var, Instr::const_i32(20));
+        gen.jump(block3);
+        
+        // Create phi in block3 (multiple predecessors)
+        gen.label(block3);
+        let _phi_val = gen.read_variable(block3, var);
+        gen.seal_block(block3);
+        
+        // Verify that any phi created has properly typed upsilons
+        for phi in &gen.phis {
+            if !phi.upsilons.is_empty() {
+                // Test that we can access InstrRef values directly
+                for upsilon_ref in &phi.upsilons {
+                    assert!(upsilon_ref.get() != 0); // Should be valid instruction reference
+                    // Verify we can access the instruction without conversion
+                    let _instr = gen.code[*upsilon_ref];
+                }
+            }
         }
     }
 }
