@@ -313,9 +313,15 @@ mod tests {
         assert_eq!(std::mem::size_of::<PhiRef>(), std::mem::size_of::<Option<PhiRef>>());
         assert_eq!(std::mem::size_of::<VarRef>(), std::mem::size_of::<Option<VarRef>>());
         
-        // All should be 2 bytes (the size of i16)
+        // All should be exactly 16 bits (2 bytes)
         assert_eq!(std::mem::size_of::<InstrRef>(), 2);
         assert_eq!(std::mem::size_of::<Option<InstrRef>>(), 2);
+        assert_eq!(std::mem::size_of::<BlockRef>(), 2);
+        assert_eq!(std::mem::size_of::<Option<BlockRef>>(), 2);
+        assert_eq!(std::mem::size_of::<PhiRef>(), 2);
+        assert_eq!(std::mem::size_of::<Option<PhiRef>>(), 2);
+        assert_eq!(std::mem::size_of::<VarRef>(), 2);
+        assert_eq!(std::mem::size_of::<Option<VarRef>>(), 2);
     }
 
     #[test]
