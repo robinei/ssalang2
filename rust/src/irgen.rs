@@ -380,41 +380,36 @@ impl IrGen {
     }
 
     fn create_pred_upsilons(&mut self, block: BlockRef, phi: PhiRef) -> Instr {
-        let mut preds: SmallVec<[BlockRef; 8]> = SmallVec::new();
-        let mut values: SmallVec<[Instr; 8]> = SmallVec::new();
-        
         let var = self.phis.get(phi).var.expect("Phi should have associated variable");
-        let phi_instr_ref = self.phis.get(phi).instr.expect("Phi should have assoiated instruction");
+        let phi_instr_ref = self.phis.get(phi).instr.expect("Phi should have associated instruction");
         let phi_instr = self.to_instr(phi_instr_ref);
         
-        let mut found_different = false;
-        let mut candidate = Instr::nop();
-        
         // Collect values from all predecessors
-        let pred_list = self.blocks.get(block).preds.clone();
-        for pred in pred_list {
-            let val = self.read_variable(pred, var);
-            
-            preds.push(pred);
+        let preds = self.blocks.get(block).preds.clone();
+        let mut values: SmallVec<[Instr; 8]> = SmallVec::new();
+        let mut unique_non_phi_values: SmallVec<[Instr; 8]> = SmallVec::new();
+        
+        for pred in &preds {
+            let val = self.read_variable(*pred, var);
             values.push(val);
             
-            if val != phi_instr {
-                if candidate.get_type() == Type::Void {
-                    candidate = val;
-                } else if candidate != val {
-                    found_different = true;
-                }
+            // Collect unique non-phi values
+            if val != phi_instr && !unique_non_phi_values.contains(&val) {
+                unique_non_phi_values.push(val);
             }
         }
         
-        assert!(values.len() > 1);
-        if candidate.get_type() != Type::Void && !found_different {
-            // All values are the same, replace phi with identity
-            let candidate_ref = self.intern_instr(candidate);
-            self.code.set(phi_instr_ref, Instr::Identity(Meta::new(candidate.get_type()), candidate_ref));
-            return candidate;
+        assert!(!values.is_empty(), "Phi should have at least one incoming value");
+        
+        // Phi elimination: if all non-phi values are the same, replace phi with that value
+        if unique_non_phi_values.len() == 1 {
+            let replacement = unique_non_phi_values[0];
+            let candidate_ref = self.intern_instr(replacement);
+            self.code.set(phi_instr_ref, Instr::Identity(Meta::new(replacement.get_type()), candidate_ref));
+            return replacement;
         }
         
+        // Multiple different values or all values are phi itself - keep the phi
         // Create upsilons for all predecessors
         for (pred, val) in preds.into_iter().zip(values.into_iter()) {
             self.upsilon(pred, phi, val);
@@ -424,8 +419,6 @@ impl IrGen {
     }
 
     pub fn write_variable(&mut self, block: BlockRef, var: VarRef, val: Instr) {
-        assert!(block.get() != 0);
-        assert!(var.get() != 0);
         assert_ne!(val.get_type(), Type::Void);
         assert_eq!(val.get_type(), self.vars.get(var).ty);
         
@@ -443,16 +436,12 @@ impl IrGen {
         let result = if !is_sealed {
             // Create incomplete phi
             let phi = self.create_phi_var(var);
-            {
-                let b = self.blocks.get_mut(block);
-                b.incomplete_phis.push(phi);
-            }
+            self.blocks.get_mut(block).incomplete_phis.push(phi);
             self.phi(phi, var_type)
         } else {
-            let pred_list = self.blocks.get(block).preds.clone();
-            if pred_list.len() == 1 && pred_list[0].get() != 0 {
+            if self.blocks.get(block).preds.len() == 1 {
                 // Exactly one predecessor
-                self.read_variable(pred_list[0], var)
+                self.read_variable(self.blocks.get(block).preds[0], var)
             } else {
                 // Multiple predecessors - create phi
                 let phi = self.create_phi_var(var);
