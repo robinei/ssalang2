@@ -380,6 +380,10 @@ impl IrGen {
     }
 
     fn create_pred_upsilons(&mut self, block: BlockRef, phi: PhiRef) -> Instr {
+        self.create_pred_upsilons_iterative(block, phi)
+    }
+
+    fn create_pred_upsilons_iterative(&mut self, block: BlockRef, phi: PhiRef) -> Instr {
         let var = self.phis.get(phi).var.expect("Phi should have associated variable");
         let phi_instr_ref = self.phis.get(phi).instr.expect("Phi should have associated instruction");
         let phi_instr = self.to_instr(phi_instr_ref);
@@ -393,9 +397,10 @@ impl IrGen {
             let val = self.read_variable(*pred, var);
             values.push(val);
             
-            // Collect unique non-phi values
-            if val != phi_instr && !unique_non_phi_values.contains(&val) {
-                unique_non_phi_values.push(val);
+            // Collect unique non-phi values (including resolved identities)
+            let resolved_val = self.resolve_identity_chain(val);
+            if resolved_val != phi_instr && !unique_non_phi_values.contains(&resolved_val) {
+                unique_non_phi_values.push(resolved_val);
             }
         }
         
@@ -416,6 +421,23 @@ impl IrGen {
         }
         
         phi_instr
+    }
+
+    fn resolve_identity_chain(&self, mut instr: Instr) -> Instr {
+        // Follow chains of Identity instructions to their final target
+        // This helps with iterative phi elimination
+        let mut visited = 0;
+        const MAX_CHAIN_LENGTH: usize = 10; // Prevent infinite loops
+        
+        while let Instr::Identity(_, target_ref) = instr {
+            if visited >= MAX_CHAIN_LENGTH {
+                break; // Prevent infinite loops in malformed IR
+            }
+            instr = self.to_instr(target_ref);
+            visited += 1;
+        }
+        
+        instr
     }
 
     pub fn write_variable(&mut self, block: BlockRef, var: VarRef, val: Instr) {
@@ -439,7 +461,12 @@ impl IrGen {
             self.blocks.get_mut(block).incomplete_phis.push(phi);
             self.phi(phi, var_type)
         } else {
-            if self.blocks.get(block).preds.len() == 1 {
+            let pred_count = self.blocks.get(block).preds.len();
+            if pred_count == 0 {
+                // Entry block with no predecessors - variable is undefined
+                // This should only happen for function arguments or uninitialized variables
+                panic!("Reading undefined variable {} in entry block {}", var.get(), block.get());
+            } else if pred_count == 1 {
                 // Exactly one predecessor
                 self.read_variable(self.blocks.get(block).preds[0], var)
             } else {
@@ -447,6 +474,7 @@ impl IrGen {
                 let phi = self.create_phi_var(var);
                 let result = self.phi(phi, var_type);
                 self.write_variable(block, var, result);
+                // create_pred_upsilons may eliminate the phi and return a different value
                 self.create_pred_upsilons(block, phi)
             }
         };
@@ -644,6 +672,58 @@ mod tests {
         // Also verify individual ref sizes
         assert_eq!(std::mem::size_of::<BlockRef>(), 2);
         assert_eq!(std::mem::size_of::<VarRef>(), 2);
+    }
+
+    #[test]
+    fn test_iterative_phi_elimination() {
+        // Test that phi elimination works through chains of identities
+        let mut gen = IrGen::new();
+        
+        // Create a simple chain where phi elimination should cascade
+        let var = gen.create_variable(Type::I32);
+        let block1 = gen.create_block();
+        let block2 = gen.create_block();
+        let block3 = gen.create_block();
+        
+        // Set up block1 with a constant
+        gen.seal_block(block1);
+        gen.label(block1);
+        gen.write_variable(block1, var, Instr::const_i32(42));
+        gen.jump(block3);
+        
+        // Set up block2 with same constant 
+        gen.seal_block(block2);
+        gen.label(block2);
+        gen.write_variable(block2, var, Instr::const_i32(42));
+        gen.jump(block3);
+        
+        // block3 should create a phi that gets eliminated
+        gen.label(block3);
+        gen.seal_block(block3);  // Seal first so phi processing happens immediately
+        let phi_result = gen.read_variable(block3, var);  // Now read the optimized result
+        
+        // The phi should be eliminated and read_variable should return the replacement value directly
+        // Since both predecessors provide ConstI32(42), phi elimination should return ConstI32(42)
+        match phi_result {
+            Instr::ConstI32(_, val) => assert_eq!(val, 42),
+            _ => panic!("Expected ConstI32(42) after phi elimination, got {:?}", phi_result),
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "Reading undefined variable")]
+    fn test_zero_predecessor_handling() {
+        let mut gen = IrGen::new();
+        
+        // Create entry block with no predecessors
+        let entry_block = gen.create_block();
+        let var = gen.create_variable(Type::I32);
+        
+        gen.seal_block(entry_block);
+        gen.label(entry_block);
+        
+        // This should panic since we're reading an undefined variable in entry block
+        gen.read_variable(entry_block, var);
     }
 
     #[test]
