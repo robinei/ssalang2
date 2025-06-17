@@ -92,25 +92,18 @@ impl<'a> PrettyPrinter<'a> {
                 self.print_expression(*cond);
                 self.buffer.push(' ');
                 
-                // Handle then branch
-                if self.is_block_node(*then_branch) {
-                    self.print_node(*then_branch, 0);
-                } else {
-                    self.buffer.push_str("{ ");
-                    self.print_node(*then_branch, 0);
-                    self.buffer.push_str(" }");
-                }
+                // Handle then branch (always a Block)
+                self.print_node(*then_branch, 0);
                 
-                // Handle else branch if it's not empty
-                if !self.is_empty_node(*else_branch) {
-                    self.buffer.push_str(" else ");
-                    if self.is_block_node(*else_branch) || self.is_if_node(*else_branch) {
+                // Handle else branch (Block or If node, but might be empty)
+                if self.is_block_node(*else_branch) {
+                    if !self.is_empty_block(*else_branch) {
+                        self.buffer.push_str(" else ");
                         self.print_node(*else_branch, 0);
-                    } else {
-                        self.buffer.push_str("{ ");
-                        self.print_node(*else_branch, 0);
-                        self.buffer.push_str(" }");
                     }
+                } else if self.is_if_node(*else_branch) {
+                    self.buffer.push_str(" else ");
+                    self.print_node(*else_branch, 0);
                 }
             }
             Node::While(flags, _scope_index, cond, body) => {
@@ -125,13 +118,8 @@ impl<'a> PrettyPrinter<'a> {
                 self.print_expression(*cond);
                 self.buffer.push(' ');
                 
-                if self.is_block_node(*body) {
-                    self.print_node(*body, 0);
-                } else {
-                    self.buffer.push_str("{ ");
-                    self.print_node(*body, 0);
-                    self.buffer.push_str(" }");
-                }
+                // Handle body (always a Block)
+                self.print_node(*body, 0);
             }
             Node::Break(_flags, _scope_index, value) => {
                 if self.is_void_value(*value) {
@@ -192,14 +180,8 @@ impl<'a> PrettyPrinter<'a> {
                 
                 self.buffer.push(' ');
                 
-                // Print function body
-                if self.is_block_node(*body) {
-                    self.print_node(*body, 0);
-                } else {
-                    self.buffer.push_str("{ ");
-                    self.print_node(*body, 0);
-                    self.buffer.push_str(" }");
-                }
+                // Print function body (always a Block)
+                self.print_node(*body, 0);
             }
         }
     }
@@ -254,10 +236,13 @@ impl<'a> PrettyPrinter<'a> {
         matches!(self.ast.get_node(node_ref), Node::If(_, _, _, _, _))
     }
 
-    fn is_empty_node(&self, _node_ref: NodeRef) -> bool {
-        // This would need to be implemented based on how empty/void nodes are represented
-        // For now, assume no node is empty
-        false
+    fn is_empty_block(&self, node_ref: NodeRef) -> bool {
+        // Check if this is a Block containing only a void node
+        if let Node::Block(_, _, first_child) = self.ast.get_node(node_ref) {
+            matches!(self.ast.get_node(*first_child), Node::TypeAtom(TypeAtom::Void))
+        } else {
+            false
+        }
     }
 
     fn is_void_value(&self, node_ref: NodeRef) -> bool {

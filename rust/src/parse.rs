@@ -294,15 +294,17 @@ impl Parser {
         let else_block = if self.current_token.token_type == TokenType::Else {
             self.advance();
             if self.current_token.token_type == TokenType::If {
-                // else if
+                // else if - return the If node directly
                 self.parse_if_statement()?
             } else {
                 // else block
                 self.parse_block()?
             }
         } else {
-            // No else clause - use void
-            self.ast.add_node(Node::TypeAtom(TypeAtom::Void), self.create_node_info_at(self.token_index))
+            // No else clause - create empty block
+            let flags = Flags::new();
+            let void_node = self.ast.add_node(Node::TypeAtom(TypeAtom::Void), self.create_node_info_at(self.token_index));
+            self.ast.add_node(Node::Block(flags, 0, void_node), self.create_node_info_at(self.token_index))
         };
         
         let flags = Flags::new();
