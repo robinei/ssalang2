@@ -73,7 +73,7 @@ impl Parser {
     }
     
     // Parse the entire program
-    pub fn parse_program(&mut self) -> ParseResult<NodeRef> {
+    pub fn parse_root(&mut self) -> ParseResult<NodeRef> {
         let root = self.parse_function()?;
         self.ast.set_root(root);
         Ok(root)
@@ -563,23 +563,23 @@ impl Parser {
     fn create_node_info_at(&self, token_index: usize) -> NodeInfo {
         NodeInfo::new(token_index)
     }
-}
 
-pub fn parse_program(input: &str) -> ParseResult<Ast> {
-    // Tokenize everything to get the full token stream
-    let mut lexer = Lexer::new(input);
-    let all_tokens = lexer.tokenize();
-    
-    // Parse semantically using the token stream
-    let mut parser = Parser::new(all_tokens.clone(), input.to_string());
-    parser.parse_program()?;
-    let mut ast = parser.into_ast();
-    
-    // Store the full token stream and source in the AST
-    ast.set_tokens(all_tokens);
-    ast.set_source(input.to_string());
-    
-    Ok(ast)
+    pub fn parse(input: &str) -> ParseResult<Ast> {
+        // Tokenize everything to get the full token stream
+        let mut lexer = Lexer::new(input);
+        let all_tokens = lexer.tokenize();
+        
+        // Parse semantically using the token stream
+        let mut parser = Parser::new(all_tokens.clone(), input.to_string());
+        parser.parse_root()?;
+        let mut ast = parser.into_ast();
+        
+        // Store the full token stream and source in the AST
+        ast.set_tokens(all_tokens);
+        ast.set_source(input.to_string());
+        
+        Ok(ast)
+    }
 }
 
 #[cfg(test)]
@@ -589,12 +589,12 @@ mod tests {
     
     fn roundtrip(input: &str) {
         // Test that input can be parsed and formatted
-        let ast = parse_program(input).unwrap();
+        let ast = Parser::parse(input).unwrap();
         let printer = PrettyPrinter::new(&ast);
         let output = printer.print();
         
         // Test that the output can be parsed again (verifies it's valid syntax)
-        let _ast2 = parse_program(&output).expect("Pretty-printed output should be valid syntax");
+        let _ast2 = Parser::parse(&output).expect("Pretty-printed output should be valid syntax");
         
         // For these tests, we just ensure the formatting process works without error
         // The actual formatting details are tested in the format-specific tests
@@ -712,7 +712,7 @@ mod tests {
         ];
         
         for input in &malformed_inputs {
-            let result = parse_program(input);
+            let result = Parser::parse(input);
             assert!(result.is_err(), "Expected parse error for input: {}", input);
         }
     }
