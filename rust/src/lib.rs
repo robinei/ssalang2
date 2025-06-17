@@ -4,3 +4,5 @@ pub mod irgen;
 pub mod compile;
 pub mod code;
 pub mod refmap;
+pub mod lexer;
+pub mod parse;

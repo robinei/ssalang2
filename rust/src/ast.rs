@@ -194,10 +194,10 @@ impl Ast {
     }
 
     // Local storage methods
-    pub fn add_locals(&mut self, locals: Vec<Local>) -> LocalsRef {
+    pub fn add_locals(&mut self, locals: &[Local]) -> LocalsRef {
         let offset = self.locals.len() as u16;
         let count = locals.len() as u16;
-        self.locals.extend(locals);
+        self.locals.extend_from_slice(locals);
         LocalsRef::new(offset, count)
     }
 
@@ -345,7 +345,7 @@ mod tests {
         let locals = vec![local1, local2];
         
         // Store the locals and get LocalsRef
-        let locals_ref = tree.add_locals(locals);
+        let locals_ref = tree.add_locals(&locals);
         assert_eq!(locals_ref.offset, 0);
         assert_eq!(locals_ref.count, 2);
         
