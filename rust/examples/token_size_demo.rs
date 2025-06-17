@@ -41,10 +41,10 @@ fn main() {
         if token.length > 0 {
             let text = lexer.get_token_text(token);
             println!("Token {}: {:?} = \"{}\" (pos: {}, len: {})", 
-                     i, token.token_type, text, token.source_loc, token.length);
+                     i, token.token_type, text, token.start, token.length);
         } else {
             println!("Token {}: {:?} (pos: {}, len: {})", 
-                     i, token.token_type, token.source_loc, token.length);
+                     i, token.token_type, token.start, token.length);
         }
     }
     

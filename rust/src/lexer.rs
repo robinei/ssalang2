@@ -42,6 +42,10 @@ pub enum TokenType {
     Colon,         // :
     Arrow,         // ->
     
+    // Formatting tokens
+    Comment,    // //
+    Newline,    // \n
+    
     // Special
     Eof,
 }
@@ -49,13 +53,13 @@ pub enum TokenType {
 #[derive(Debug, Clone, Copy)]
 pub struct Token {
     pub token_type: TokenType,
-    pub source_loc: u32,
+    pub start: u32,
     pub length: u32,
 }
 
 impl Token {
-    pub fn new(token_type: TokenType, source_loc: u32, length: u32) -> Self {
-        Self { token_type, source_loc, length }
+    pub fn new(token_type: TokenType, start: u32, length: u32) -> Self {
+        Self { token_type, start, length }
     }
 }
 
@@ -105,18 +109,20 @@ impl<'a> Lexer<'a> {
     }
     
     fn skip_whitespace(&mut self) {
-        while self.current_char != '\0' && self.current_char.is_whitespace() {
+        while self.current_char != '\0' && self.current_char.is_whitespace() && self.current_char != '\n' {
             self.advance();
         }
     }
     
-    fn skip_comment(&mut self) {
-        // Skip // comments
+    fn read_comment(&mut self) -> u32 {
+        let start_pos = self.position;
+        // Read // comments
         if self.current_char == '/' && self.peek() == '/' {
             while self.current_char != '\0' && self.current_char != '\n' {
                 self.advance();
             }
         }
+        (self.position - start_pos) as u32
     }
     
     fn read_identifier(&mut self) -> u32 {
@@ -227,109 +233,115 @@ impl<'a> Lexer<'a> {
     }
     
     pub fn next_token(&mut self) -> Token {
-        loop {
-            self.skip_whitespace();
+        let start_pos = self.position as u32;
+        
+        match self.current_char {
+            '\0' => Token::new(TokenType::Eof, start_pos, 0),
             
-            let start_pos = self.position as u32;
+            '\n' => {
+                self.advance();
+                Token::new(TokenType::Newline, start_pos, 1)
+            }
             
-            match self.current_char {
-                '\0' => return Token::new(TokenType::Eof, start_pos, 0),
-                
-                '/' if self.peek() == '/' => {
-                    self.skip_comment();
-                    continue;
-                }
-                
-                // Fast keyword/identifier lookup by first character
-                'a'..='z' | 'A'..='Z' | '_' => {
-                    let length = self.read_identifier();
-                    let token_type = self.keyword_or_identifier(start_pos as usize, length as usize);
-                    return Token::new(token_type, start_pos, length);
-                }
-                
-                '0'..='9' => {
-                    let length = self.read_number();
-                    return Token::new(TokenType::IntLiteral, start_pos, length);
-                }
-                
-                '"' => {
-                    let length = self.read_string();
-                    return Token::new(TokenType::StringLiteral, start_pos, length);
-                }
-                
-                '+' => {
+            '/' if self.peek() == '/' => {
+                let length = self.read_comment();
+                Token::new(TokenType::Comment, start_pos, length)
+            }
+            
+            ch if ch.is_whitespace() => {
+                self.skip_whitespace();
+                self.next_token() // Skip whitespace and get next token
+            }
+            
+            // Fast keyword/identifier lookup by first character
+            'a'..='z' | 'A'..='Z' | '_' => {
+                let length = self.read_identifier();
+                let token_type = self.keyword_or_identifier(start_pos as usize, length as usize);
+                Token::new(token_type, start_pos, length)
+            }
+            
+            '0'..='9' => {
+                let length = self.read_number();
+                Token::new(TokenType::IntLiteral, start_pos, length)
+            }
+            
+            '"' => {
+                let length = self.read_string();
+                Token::new(TokenType::StringLiteral, start_pos, length)
+            }
+            
+            '+' => {
+                self.advance();
+                Token::new(TokenType::Plus, start_pos, 1)
+            }
+            
+            '=' => {
+                self.advance();
+                if self.current_char == '=' {
                     self.advance();
-                    return Token::new(TokenType::Plus, start_pos, 1);
+                    Token::new(TokenType::Equal, start_pos, 2)
+                } else {
+                    Token::new(TokenType::Assign, start_pos, 1)
                 }
-                
-                '=' => {
+            }
+            
+            '!' => {
+                self.advance();
+                if self.current_char == '=' {
                     self.advance();
-                    if self.current_char == '=' {
-                        self.advance();
-                        return Token::new(TokenType::Equal, start_pos, 2);
-                    } else {
-                        return Token::new(TokenType::Assign, start_pos, 1);
-                    }
+                    Token::new(TokenType::NotEqual, start_pos, 2)
+                } else {
+                    panic!("Unexpected character '!' at position {}", self.position);
                 }
-                
-                '!' => {
+            }
+            
+            '-' => {
+                self.advance();
+                if self.current_char == '>' {
                     self.advance();
-                    if self.current_char == '=' {
-                        self.advance();
-                        return Token::new(TokenType::NotEqual, start_pos, 2);
-                    } else {
-                        panic!("Unexpected character '!' at position {}", self.position);
-                    }
+                    Token::new(TokenType::Arrow, start_pos, 2)
+                } else {
+                    Token::new(TokenType::Minus, start_pos, 1)
                 }
-                
-                '-' => {
-                    self.advance();
-                    if self.current_char == '>' {
-                        self.advance();
-                        return Token::new(TokenType::Arrow, start_pos, 2);
-                    } else {
-                        return Token::new(TokenType::Minus, start_pos, 1);
-                    }
-                }
-                
-                '(' => {
-                    self.advance();
-                    return Token::new(TokenType::LeftParen, start_pos, 1);
-                }
-                
-                ')' => {
-                    self.advance();
-                    return Token::new(TokenType::RightParen, start_pos, 1);
-                }
-                
-                '{' => {
-                    self.advance();
-                    return Token::new(TokenType::LeftBrace, start_pos, 1);
-                }
-                
-                '}' => {
-                    self.advance();
-                    return Token::new(TokenType::RightBrace, start_pos, 1);
-                }
-                
-                ';' => {
-                    self.advance();
-                    return Token::new(TokenType::Semicolon, start_pos, 1);
-                }
-                
-                ',' => {
-                    self.advance();
-                    return Token::new(TokenType::Comma, start_pos, 1);
-                }
-                
-                ':' => {
-                    self.advance();
-                    return Token::new(TokenType::Colon, start_pos, 1);
-                }
-                
-                ch => {
-                    panic!("Unexpected character '{}' at position {}", ch, self.position);
-                }
+            }
+            
+            '(' => {
+                self.advance();
+                Token::new(TokenType::LeftParen, start_pos, 1)
+            }
+            
+            ')' => {
+                self.advance();
+                Token::new(TokenType::RightParen, start_pos, 1)
+            }
+            
+            '{' => {
+                self.advance();
+                Token::new(TokenType::LeftBrace, start_pos, 1)
+            }
+            
+            '}' => {
+                self.advance();
+                Token::new(TokenType::RightBrace, start_pos, 1)
+            }
+            
+            ';' => {
+                self.advance();
+                Token::new(TokenType::Semicolon, start_pos, 1)
+            }
+            
+            ',' => {
+                self.advance();
+                Token::new(TokenType::Comma, start_pos, 1)
+            }
+            
+            ':' => {
+                self.advance();
+                Token::new(TokenType::Colon, start_pos, 1)
+            }
+            
+            ch => {
+                panic!("Unexpected character '{}' at position {}", ch, self.position);
             }
         }
     }
@@ -353,7 +365,7 @@ impl<'a> Lexer<'a> {
         if token.length == 0 {
             ""
         } else {
-            let start = token.source_loc as usize;
+            let start = token.start as usize;
             let end = start + token.length as usize;
             &self.input[start..end]
         }

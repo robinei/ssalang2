@@ -1,8 +1,21 @@
 use crate::ast::{Ast, Node, NodeRef, TypeAtom};
+use crate::lexer::{Token, TokenType};
+
+#[derive(Debug, Clone, Copy)]
+pub enum FormatContext {
+    BetweenParameters,     // Handle commas, spaces in parameter lists
+    AfterStatement,        // Allow inline comments after statements
+    BetweenStatements,     // Allow multiple newlines between statements
+    InExpression,          // Tight spacing within expressions
+    FunctionSignature,     // Function name, params, return type
+    BlockContent,          // Inside braces
+    TypeAnnotation,        // Around type specifications
+}
 
 pub struct PrettyPrinter<'a> {
     ast: &'a Ast,
     buffer: String,
+    last_emitted_token: usize,
 }
 
 impl<'a> PrettyPrinter<'a> {
@@ -10,17 +23,26 @@ impl<'a> PrettyPrinter<'a> {
         Self { 
             ast,
             buffer: String::with_capacity(1024), // Pre-allocate reasonable capacity
+            last_emitted_token: 0,
         }
     }
 
     pub fn print(mut self) -> String {
         if let Some(root) = self.ast.get_root() {
             self.print_node(root, 0);
+            
+            // Emit any remaining formatting tokens at the end
+            self.emit_formatting_to(self.ast.get_tokens().len(), 0);
         }
         self.buffer
     }
 
     fn print_node(&mut self, node_ref: NodeRef, indent: usize) {
+        let node_info = self.ast.get_node_info(node_ref);
+        
+        // Emit formatting tokens up to this node's start
+        self.emit_formatting_to(node_info.first_token, indent);
+        
         let node = self.ast.get_node(node_ref);
         match node {
             Node::TypeAtom(atom) => self.write_type_atom(*atom),
@@ -274,6 +296,61 @@ impl<'a> PrettyPrinter<'a> {
     fn is_void_value(&self, node_ref: NodeRef) -> bool {
         // Check if this represents a void value (like empty break/continue)
         matches!(self.ast.get_node(node_ref), Node::TypeAtom(TypeAtom::Void))
+    }
+    
+    
+    /// Get the text for a token from the original source
+    fn get_token_text(&self, token: &Token) -> &str {
+        if token.length == 0 {
+            ""
+        } else {
+            let source = self.ast.get_source();
+            let start = token.start as usize;
+            let end = start + token.length as usize;
+            &source[start..end]
+        }
+    }
+    
+    /// Emit formatting tokens up to the specified token index
+    fn emit_formatting_to(&mut self, target_token_index: usize, indent: usize) {
+        let tokens = self.ast.get_tokens();
+        let mut consecutive_newlines = 0;
+        
+        while self.last_emitted_token < target_token_index && self.last_emitted_token < tokens.len() {
+            let token = &tokens[self.last_emitted_token];
+            
+            match token.token_type {
+                TokenType::Comment => {
+                    let comment_text = self.get_token_text(token).to_string();
+                    
+                    if !self.buffer.is_empty() && !self.buffer.ends_with('\n') {
+                        // Inline comment - single space separation
+                        self.buffer.push(' ');
+                        self.buffer.push_str(&comment_text);
+                    } else {
+                        // Standalone comment - align with current indentation  
+                        self.write_indent(indent);
+                        self.buffer.push_str(&comment_text);
+                    }
+                    consecutive_newlines = 0;
+                }
+                
+                TokenType::Newline => {
+                    consecutive_newlines += 1;
+                    
+                    // Allow max 2 consecutive empty lines
+                    if consecutive_newlines <= 3 {
+                        self.buffer.push('\n');
+                    }
+                }
+                
+                _ => {
+                    // Skip semantic tokens - they'll be handled by the pretty printer
+                }
+            }
+            
+            self.last_emitted_token += 1;
+        }
     }
 }
 

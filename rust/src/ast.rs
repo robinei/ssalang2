@@ -1,3 +1,5 @@
+use crate::lexer::Token;
+
 pub type LocalIndex = u16;
 pub type ScopeIndex = u16;
 
@@ -128,12 +130,12 @@ pub enum Node {
 // Per-node metadata stored alongside AST nodes
 #[derive(Debug, Clone)]
 pub struct NodeInfo {
-    pub source_loc: u32,
+    pub first_token: usize,  // Index into token stream where this node starts
 }
 
 impl NodeInfo {
-    pub fn new(source_loc: u32) -> Self {
-        Self { source_loc }
+    pub fn new(first_token: usize) -> Self {
+        Self { first_token }
     }
 }
 
@@ -153,6 +155,8 @@ pub struct Ast {
     node_info: Vec<NodeInfo>, // Per-node metadata (source location, etc.)
     locals: Vec<Local>,       // Flat array of all locals across all functions
     strings: Vec<String>,     // String storage
+    tokens: Vec<Token>,       // Full token stream including formatting tokens
+    source: String,           // Original source text for token text extraction
     root: Option<NodeRef>,    // Root node of the tree
 }
 
@@ -163,6 +167,8 @@ impl Ast {
             node_info: Vec::new(),
             locals: Vec::new(),
             strings: Vec::new(),
+            tokens: Vec::new(),
+            source: String::new(),
             root: None,
         }
     }
@@ -221,6 +227,23 @@ impl Ast {
     pub fn get_string(&self, string_ref: StringRef) -> &str {
         let index = string_ref.get() as usize;
         &self.strings[index]
+    }
+
+    // Token storage methods
+    pub fn set_tokens(&mut self, tokens: Vec<Token>) {
+        self.tokens = tokens;
+    }
+
+    pub fn get_tokens(&self) -> &[Token] {
+        &self.tokens
+    }
+
+    pub fn set_source(&mut self, source: String) {
+        self.source = source;
+    }
+
+    pub fn get_source(&self) -> &str {
+        &self.source
     }
 
 }
@@ -428,14 +451,14 @@ mod tests {
     #[test]
     fn test_node_info() {
         let mut tree = Ast::new();
-        let bool_ref = tree.add_node(Node::ConstBool(true), NodeInfo::new(123));
-        let i32_ref = tree.add_node(Node::ConstI32(42), NodeInfo::new(456));
+        let bool_ref = tree.add_node(Node::ConstBool(true), NodeInfo::new(5));
+        let i32_ref = tree.add_node(Node::ConstI32(42), NodeInfo::new(10));
         
         let bool_info = tree.get_node_info(bool_ref);
         let i32_info = tree.get_node_info(i32_ref);
         
-        assert_eq!(bool_info.source_loc, 123);
-        assert_eq!(i32_info.source_loc, 456);
+        assert_eq!(bool_info.first_token, 5);
+        assert_eq!(i32_info.first_token, 10);
     }
 
 }
