@@ -196,6 +196,7 @@ mod tests {
     use super::*;
 
     fn roundtrip(input: &str) {
+        // NEVER fix tests by changing this function - fix the implementations that we are testing
         let ast = Parser::parse(input).unwrap();
         let formatter = CodeFormatter::new(&ast);
         let output = formatter.format();

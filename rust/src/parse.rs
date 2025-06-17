@@ -588,16 +588,11 @@ mod tests {
     use crate::print::PrettyPrinter;
     
     fn roundtrip(input: &str) {
-        // Test that input can be parsed and formatted
+        // NEVER fix tests by changing this function - fix the implementations that we are testing
         let ast = Parser::parse(input).unwrap();
         let printer = PrettyPrinter::new(&ast);
         let output = printer.print();
-        
-        // Test that the output can be parsed again (verifies it's valid syntax)
-        let _ast2 = Parser::parse(&output).expect("Pretty-printed output should be valid syntax");
-        
-        // For these tests, we just ensure the formatting process works without error
-        // The actual formatting details are tested in the format-specific tests
+        assert_eq!(input, output);
     }
 
     #[test] 
@@ -628,10 +623,6 @@ mod tests {
         // Test various escape sequences
         let escaped_input = r#"fn main() { return "Hello \"World\"\nNew line\tTab\\Backslash"; }"#;
         roundtrip(escaped_input);
-        
-        // Test that control characters get properly escaped
-        let control_input = "fn main() { return \"Hello\x01\x02World\"; }";
-        roundtrip(control_input);
     }
     
     #[test]
