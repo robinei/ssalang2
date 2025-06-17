@@ -585,7 +585,7 @@ pub fn parse_program(input: &str) -> ParseResult<Ast> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pretty_print::PrettyPrinter;
+    use crate::print::PrettyPrinter;
     
     fn roundtrip(input: &str) {
         // Test that input can be parsed and formatted

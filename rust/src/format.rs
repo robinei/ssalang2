@@ -1,24 +1,13 @@
 use crate::ast::Ast;
 use crate::lexer::{Token, TokenType};
 
-#[derive(Debug, Clone, Copy)]
-pub enum FormatContext {
-    BetweenParameters,     // Handle commas, spaces in parameter lists
-    AfterStatement,        // Allow inline comments after statements
-    BetweenStatements,     // Allow multiple newlines between statements
-    InExpression,          // Tight spacing within expressions
-    FunctionSignature,     // Function name, params, return type
-    BlockContent,          // Inside braces
-    TypeAnnotation,        // Around type specifications
-}
-
-pub struct PrettyPrinter<'a> {
+pub struct CodeFormatter<'a> {
     ast: &'a Ast,
     buffer: String,
     current_token_index: usize,
 }
 
-impl<'a> PrettyPrinter<'a> {
+impl<'a> CodeFormatter<'a> {
     pub fn new(ast: &'a Ast) -> Self {
         Self { 
             ast,
@@ -27,7 +16,7 @@ impl<'a> PrettyPrinter<'a> {
         }
     }
 
-    pub fn print(mut self) -> String {
+    pub fn format(mut self) -> String {
         let tokens = self.ast.get_tokens();
         let mut current_indent = 0;
         
@@ -43,7 +32,7 @@ impl<'a> PrettyPrinter<'a> {
                 TokenType::RightBrace => {
                     current_indent = current_indent.saturating_sub(1);
                     self.buffer.push('\n');
-                    self.write_indent(current_indent);
+                    self.emit_indent(current_indent);
                     self.emit_current_token(current_indent);
                 }
                 TokenType::Semicolon => {
@@ -79,7 +68,7 @@ impl<'a> PrettyPrinter<'a> {
                     self.buffer.push_str(&comment_text);
                 } else {
                     // Standalone comment - align with current indentation  
-                    self.write_indent(indent);
+                    self.emit_indent(indent);
                     self.buffer.push_str(&comment_text);
                 }
             }
@@ -168,7 +157,7 @@ impl<'a> PrettyPrinter<'a> {
         }
     }
 
-    fn write_indent(&mut self, indent: usize) {
+    fn emit_indent(&mut self, indent: usize) {
         for _ in 0..indent {
             self.buffer.push_str("  ");
         }
