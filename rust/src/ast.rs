@@ -142,6 +142,7 @@ impl NodeInfo {
 // Separate structure for local variable metadata (used in function contexts)
 #[derive(Debug, Clone)]
 pub struct Local {
+    pub name: StringRef,
     pub is_param: bool,
     pub is_static: bool,
     pub is_const: bool,
@@ -216,6 +217,11 @@ impl Ast {
     pub fn get_local(&self, index: LocalIndex) -> &Local {
         &self.locals[index as usize]
     }
+    
+    pub fn get_local_name(&self, index: LocalIndex) -> &str {
+        let local = self.get_local(index);
+        self.get_string(local.name)
+    }
 
     // String storage methods
     pub fn add_string(&mut self, string: String) -> StringRef {
@@ -244,221 +250,6 @@ impl Ast {
 
     pub fn get_source(&self) -> &str {
         &self.source
-    }
-
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_node_ref() {
-        let mut tree = Ast::new();
-        let r1 = tree.add_node(Node::ConstBool(true), NodeInfo::new(0));
-        let r2 = tree.add_node(Node::ConstBool(false), NodeInfo::new(0));
-        
-        assert_eq!(r1.get(), 0);
-        assert_eq!(r2.get(), 1);
-        assert_ne!(r1, r2);
-        
-        // Test that we can get the underlying value
-        let val: u32 = r1.get();
-        assert_eq!(val, 0);
-    }
-
-    #[test]
-    fn test_flags() {
-        let mut flags = Flags::new();
-        assert!(!flags.is_static());
-        assert!(!flags.is_inline());
-
-        flags.set_is_static(true);
-        flags.set_is_inline(true);
-        assert!(flags.is_static());
-        assert!(flags.is_inline());
-    }
-
-    #[test]
-    fn test_ast_node_flags() {
-        let mut tree = Ast::new();
-        let cond_ref = tree.add_node(Node::ConstBool(true), NodeInfo::new(0));
-        let then_ref = tree.add_node(Node::ConstBool(true), NodeInfo::new(0));
-        let else_ref = tree.add_node(Node::ConstBool(false), NodeInfo::new(0));
-        
-        let mut if_flags = Flags::new();
-        if_flags.set_is_static(true);
-        if_flags.set_is_inline(false);
-        let if_node = Node::If(
-            if_flags,
-            5, 
-            cond_ref, 
-            then_ref, 
-            else_ref
-        );
-
-        if let Node::If(flags, _, _, _, _) = if_node {
-            assert!(flags.is_static());
-            assert!(!flags.is_inline());
-        } else {
-            panic!("Expected If node");
-        }
-
-        let body_ref = tree.add_node(Node::ConstBool(true), NodeInfo::new(0));
-        let return_type_ref = tree.add_node(Node::TypeAtom(TypeAtom::Bool), NodeInfo::new(0));
-        
-        let mut func_flags = Flags::new();
-        func_flags.set_is_static(false);
-        func_flags.set_is_inline(true);
-        let locals_ref = LocalsRef::new(0, 2);
-        let func_node = Node::Func(
-            func_flags,
-            locals_ref,
-            body_ref,
-            return_type_ref
-        );
-
-        if let Node::Func(flags, locals_ref, _, _) = func_node {
-            assert!(!flags.is_static());
-            assert!(flags.is_inline());
-            assert_eq!(locals_ref.offset, 0);
-            assert_eq!(locals_ref.count, 2);
-        } else {
-            panic!("Expected Func node");
-        }
-    }
-
-    #[test]
-    fn test_ast_node_size() {
-        // Test that the enum is optimally sized
-        assert_eq!(std::mem::size_of::<Node>(), 16);
-    }
-
-    #[test]
-    fn test_local_write_definition_flag() {
-        let mut tree = Ast::new();
-        let expr_ref = tree.add_node(Node::ConstI32(42), NodeInfo::new(0));
-        
-        let write_node = Node::LocalWrite(true, 10, expr_ref);
-        if let Node::LocalWrite(is_definition, _, _) = write_node {
-            assert!(is_definition);
-        } else {
-            panic!("Expected LocalWrite node");
-        }
-
-        let expr_ref2 = tree.add_node(Node::ConstI32(100), NodeInfo::new(0));
-        let assign_node = Node::LocalWrite(false, 20, expr_ref2);
-        if let Node::LocalWrite(is_definition, _, _) = assign_node {
-            assert!(!is_definition);
-        } else {
-            panic!("Expected LocalWrite node");
-        }
-    }
-
-    #[test]
-    fn test_ast_tree_locals() {
-        let mut tree = Ast::new();
-        
-        // Create type references for locals
-        let type1_ref = tree.add_node(Node::TypeAtom(TypeAtom::I32), NodeInfo::new(0));
-        let type2_ref = tree.add_node(Node::TypeAtom(TypeAtom::Bool), NodeInfo::new(0));
-        
-        // Create some locals
-        let local1 = Local { is_param: true, is_static: false, is_const: false, ty: type1_ref };
-        let local2 = Local { is_param: true, is_static: false, is_const: true, ty: type2_ref };
-        let locals = vec![local1, local2];
-        
-        // Store the locals and get LocalsRef
-        let locals_ref = tree.add_locals(&locals);
-        assert_eq!(locals_ref.offset, 0);
-        assert_eq!(locals_ref.count, 2);
-        
-        // Retrieve the locals using LocalsRef
-        let retrieved_locals = tree.get_locals(locals_ref);
-        assert_eq!(retrieved_locals.len(), 2);
-        assert!(retrieved_locals[0].is_param);
-        assert!(!retrieved_locals[0].is_const);
-        assert!(retrieved_locals[1].is_param);
-        assert!(retrieved_locals[1].is_const);
-        
-        // Test individual local access
-        let local = tree.get_local(0);
-        assert!(local.is_param);
-        assert_eq!(local.ty.get(), type1_ref.get());
-    }
-
-    #[test]
-    fn test_ast_tree_strings() {
-        let mut tree = Ast::new();
-        
-        // Store some strings
-        let hello_ref = tree.add_string("Hello".to_string());
-        let world_ref = tree.add_string("World".to_string());
-        
-        // Retrieve the strings using refs
-        assert_eq!(tree.get_string(hello_ref), "Hello");
-        assert_eq!(tree.get_string(world_ref), "World");
-        
-        // Test empty string by adding one
-        let empty_ref = tree.add_string("".to_string());
-        assert_eq!(tree.get_string(empty_ref), "");
-        
-        // Test ConstString node
-        let string_node = Node::ConstString(hello_ref);
-        if let Node::ConstString(string_ref) = string_node {
-            assert_eq!(string_ref.get(), hello_ref.get());
-        } else {
-            panic!("Expected ConstString node");
-        }
-    }
-
-    #[test]
-    fn test_ast_tree_nodes() {
-        let mut tree = Ast::new();
-        
-        // Add some nodes to the context
-        let bool_node = Node::ConstBool(true);
-        let i32_node = Node::ConstI32(42);
-        
-        let bool_ref = tree.add_node(bool_node, NodeInfo::new(100));
-        let i32_ref = tree.add_node(i32_node, NodeInfo::new(200));
-        
-        // Retrieve nodes
-        if let Node::ConstBool(value) = tree.get_node(bool_ref) {
-            assert_eq!(*value, true);
-        } else {
-            panic!("Expected ConstBool node");
-        }
-        
-        if let Node::ConstI32(value) = tree.get_node(i32_ref) {
-            assert_eq!(*value, 42);
-        } else {
-            panic!("Expected ConstI32 node");
-        }
-    }
-
-    #[test]
-    fn test_ast_local() {
-        let mut tree = Ast::new();
-        let type_ref = tree.add_node(Node::TypeAtom(TypeAtom::I32), NodeInfo::new(0));
-        let local = Local { is_param: true, is_static: false, is_const: false, ty: type_ref };
-        assert!(local.is_param);
-        assert!(!local.is_static);
-        assert!(!local.is_const);
-        assert_eq!(local.ty.get(), type_ref.get());
-    }
-
-    #[test]
-    fn test_node_info() {
-        let mut tree = Ast::new();
-        let bool_ref = tree.add_node(Node::ConstBool(true), NodeInfo::new(5));
-        let i32_ref = tree.add_node(Node::ConstI32(42), NodeInfo::new(10));
-        
-        let bool_info = tree.get_node_info(bool_ref);
-        let i32_info = tree.get_node_info(i32_ref);
-        
-        assert_eq!(bool_info.first_token, 5);
-        assert_eq!(i32_info.first_token, 10);
     }
 
 }

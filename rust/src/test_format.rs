@@ -43,8 +43,8 @@ fn main(x: i32, y: bool) -> i32 {
         
         // Verify key structural elements are preserved
         assert!(output.contains("fn main"));
-        assert!(output.contains("local_0: i32"));
-        assert!(output.contains("local_1: bool"));
+        assert!(output.contains("x: i32"));
+        assert!(output.contains("y: bool"));
         assert!(output.contains("-> i32"));
         assert!(output.contains("return 42"));
     }

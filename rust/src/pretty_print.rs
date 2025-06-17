@@ -70,25 +70,25 @@ impl<'a> PrettyPrinter<'a> {
             }
             Node::LocalWrite(is_definition, local_index, expr) => {
                 self.write_indent(indent);
+                let var_name = self.ast.get_local_name(*local_index);
                 if *is_definition {
                     // This is a let statement
-                    self.buffer.push_str("let local_");
-                    self.buffer.push_str(&local_index.to_string());
+                    self.buffer.push_str("let ");
+                    self.buffer.push_str(var_name);
                     self.buffer.push_str(" = ");
                     self.print_expression(*expr);
                     self.buffer.push(';');
                 } else {
                     // This is an assignment
-                    self.buffer.push_str("local_");
-                    self.buffer.push_str(&local_index.to_string());
+                    self.buffer.push_str(var_name);
                     self.buffer.push_str(" = ");
                     self.print_expression(*expr);
                     self.buffer.push(';');
                 }
             }
             Node::LocalRead(local_index) => {
-                self.buffer.push_str("local_");
-                self.buffer.push_str(&local_index.to_string());
+                let var_name = self.ast.get_local_name(*local_index);
+                self.buffer.push_str(var_name);
             }
             Node::Block(flags, _scope_index, first_child) => {
                 self.write_indent(indent);
@@ -211,12 +211,12 @@ impl<'a> PrettyPrinter<'a> {
                     .filter(|(_, local)| local.is_param)
                     .collect();
                 
-                for (i, (local_idx, local)) in params.iter().enumerate() {
+                for (i, (_local_idx, local)) in params.iter().enumerate() {
                     if i > 0 {
                         self.buffer.push_str(", ");
                     }
-                    self.buffer.push_str("local_");
-                    self.buffer.push_str(&local_idx.to_string());
+                    let param_name = self.ast.get_string(local.name);
+                    self.buffer.push_str(param_name);
                     self.buffer.push_str(": ");
                     self.print_node(local.ty, 0);
                 }

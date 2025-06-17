@@ -151,8 +151,10 @@ impl Parser {
     
     // Parse a function parameter
     fn parse_parameter(&mut self) -> ParseResult<Local> {
-        let _param_name = if let TokenType::Identifier = &self.current_token.token_type {
+        let param_name = if let TokenType::Identifier = &self.current_token.token_type {
+            let name_text = self.get_token_text(&self.current_token).to_string();
             self.advance();
+            name_text
         } else {
             return Err(ParseError::new("Expected parameter name".to_string(), self.current_token.start));
         };
@@ -160,7 +162,10 @@ impl Parser {
         self.expect(TokenType::Colon)?;
         let param_type = self.parse_type()?;
         
+        let name_ref = self.ast.add_string(param_name);
+        
         Ok(Local {
+            name: name_ref,
             is_param: true,
             is_static: false,
             is_const: false,
@@ -240,12 +245,14 @@ impl Parser {
             false
         };
         
-        // Variable name (for local index, we'll use a dummy value)
-        if let TokenType::Identifier = &self.current_token.token_type {
+        // Variable name
+        let var_name = if let TokenType::Identifier = &self.current_token.token_type {
+            let name_text = self.get_token_text(&self.current_token).to_string();
             self.advance();
+            name_text
         } else {
             return Err(ParseError::new("Expected variable name".to_string(), self.current_token.start));
-        }
+        };
         
         self.expect(TokenType::Assign)?;
         let expr = self.parse_expression()?;
@@ -254,8 +261,24 @@ impl Parser {
             self.advance();
         }
         
-        // Create a LocalWrite node (is_definition=true, dummy local_index=0)
-        let local_write = Node::LocalWrite(true, 0, expr);
+        // Create a Local entry for this variable
+        let name_ref = self.ast.add_string(var_name);
+        // For now, assume i32 type - in a real implementation this would be inferred
+        let var_type = self.ast.add_node(Node::TypeAtom(TypeAtom::I32), self.create_node_info_at(self.token_index));
+        let local = Local {
+            name: name_ref,
+            is_param: false,
+            is_static: false,
+            is_const: false,
+            ty: var_type,
+        };
+        
+        // Add the local and get its index
+        let locals_ref = self.ast.add_locals(&[local]);
+        let local_index = locals_ref.offset; // This local is at offset 0 in its own LocalsRef
+        
+        // Create a LocalWrite node (is_definition=true, with proper local_index)
+        let local_write = Node::LocalWrite(true, local_index, expr);
         Ok(self.ast.add_node(local_write, self.create_node_info_at(start_token_index)))
     }
     
@@ -456,9 +479,26 @@ impl Parser {
             }
             
             TokenType::Identifier => {
+                let identifier_text = self.get_token_text(&token).to_string();
                 self.advance();
-                // For now, treat as local read with dummy index
-                let local_read = Node::LocalRead(0);
+                
+                // For now, create a temporary local for this identifier
+                // In a real implementation, this would do proper symbol table lookup
+                let name_ref = self.ast.add_string(identifier_text);
+                let var_type = self.ast.add_node(Node::TypeAtom(TypeAtom::I32), self.create_node_info_at(start_token_index));
+                let local = Local {
+                    name: name_ref,
+                    is_param: false,
+                    is_static: false,
+                    is_const: false,
+                    ty: var_type,
+                };
+                
+                // Add the local and get its index
+                let locals_ref = self.ast.add_locals(&[local]);
+                let local_index = locals_ref.offset;
+                
+                let local_read = Node::LocalRead(local_index);
                 Ok(self.ast.add_node(local_read, self.create_node_info_at(start_token_index)))
             }
             
