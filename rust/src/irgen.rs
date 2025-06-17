@@ -380,10 +380,6 @@ impl IrGen {
     }
 
     fn create_pred_upsilons(&mut self, block: BlockRef, phi: PhiRef) -> Instr {
-        self.create_pred_upsilons_iterative(block, phi)
-    }
-
-    fn create_pred_upsilons_iterative(&mut self, block: BlockRef, phi: PhiRef) -> Instr {
         let var = self.phis.get(phi).var.expect("Phi should have associated variable");
         let phi_instr_ref = self.phis.get(phi).instr.expect("Phi should have associated instruction");
         let phi_instr = self.to_instr(phi_instr_ref);

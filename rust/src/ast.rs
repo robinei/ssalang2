@@ -222,6 +222,7 @@ impl Ast {
         let index = string_ref.get() as usize;
         &self.strings[index]
     }
+
 }
 
 #[cfg(test)]
@@ -436,4 +437,5 @@ mod tests {
         assert_eq!(bool_info.source_loc, 123);
         assert_eq!(i32_info.source_loc, 456);
     }
+
 }

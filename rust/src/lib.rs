@@ -6,3 +6,4 @@ pub mod code;
 pub mod refmap;
 pub mod lexer;
 pub mod parse;
+pub mod pretty_print;

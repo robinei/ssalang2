@@ -507,144 +507,145 @@ pub fn parse_program(input: &str) -> ParseResult<Ast> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pretty_print::PrettyPrinter;
     
-    #[test]
-    fn test_parse_simple_function() {
-        let input = r#"
-            fn main() -> void {
-                return 42;
-            }
-        "#;
-        
+    fn roundtrip(input: &str) -> String {
         let ast = parse_program(input).unwrap();
-        let root = ast.get_root().unwrap();
-        
-        match ast.get_node(root) {
-            Node::Func(_, _, body, _) => {
-                match ast.get_node(*body) {
-                    Node::Block(_, _, first_child) => {
-                        match ast.get_node(*first_child) {
-                            Node::Return(value) => {
-                                match ast.get_node(*value) {
-                                    Node::ConstI32(42) => {} // Success
-                                    _ => panic!("Expected ConstI32(42)"),
-                                }
-                            }
-                            _ => panic!("Expected Return node"),
-                        }
-                    }
-                    _ => panic!("Expected Block node"),
-                }
-            }
-            _ => panic!("Expected Func node"),
+        let printer = PrettyPrinter::new(&ast);
+        printer.print()
+    }
+    
+    fn roundtrip_contains(input: &str, expected: &[&str]) {
+        let output = roundtrip(input);
+        for expected_part in expected {
+            assert!(output.contains(expected_part), 
+                "Output '{}' should contain '{}'", output, expected_part);
         }
     }
     
-    #[test]
-    fn test_parse_arithmetic() {
-        let input = r#"
-            fn main() -> i32 {
-                return 1 + 2;
-            }
-        "#;
-        
-        let ast = parse_program(input).unwrap();
-        let root = ast.get_root().unwrap();
-        
-        match ast.get_node(root) {
-            Node::Func(_, _, body, _) => {
-                match ast.get_node(*body) {
-                    Node::Block(_, _, first_child) => {
-                        match ast.get_node(*first_child) {
-                            Node::Return(value) => {
-                                match ast.get_node(*value) {
-                                    Node::BinopAdd(left, right) => {
-                                        match (ast.get_node(*left), ast.get_node(*right)) {
-                                            (Node::ConstI32(1), Node::ConstI32(2)) => {} // Success
-                                            _ => panic!("Expected 1 + 2"),
-                                        }
-                                    }
-                                    _ => panic!("Expected BinopAdd"),
-                                }
-                            }
-                            _ => panic!("Expected Return node"),
-                        }
-                    }
-                    _ => panic!("Expected Block node"),
-                }
-            }
-            _ => panic!("Expected Func node"),
-        }
+    fn roundtrip_exact(input: &str, expected: &str) {
+        let output = roundtrip(input);
+        assert_eq!(output.trim(), expected.trim(), "Round-trip should match exactly");
+    }
+
+    #[test] 
+    fn test_simple_function() {
+        roundtrip_contains("fn main() { return 42; }", &["fn main()", "return 42"]);
     }
     
     #[test]
-    fn test_parse_if_statement() {
-        let input = r#"
-            fn main() -> void {
-                if true {
-                    return 1;
-                } else {
-                    return 2;
-                }
-            }
-        "#;
-        
-        let ast = parse_program(input).unwrap();
-        let root = ast.get_root().unwrap();
-        
-        match ast.get_node(root) {
-            Node::Func(_, _, body, _) => {
-                match ast.get_node(*body) {
-                    Node::Block(_, _, first_child) => {
-                        match ast.get_node(*first_child) {
-                            Node::If(_, _, cond, then_block, else_block) => {
-                                match ast.get_node(*cond) {
-                                    Node::ConstBool(true) => {} // Success
-                                    _ => panic!("Expected ConstBool(true)"),
-                                }
-                                // Check then and else blocks exist
-                                assert!(matches!(ast.get_node(*then_block), Node::Block(_, _, _)));
-                                assert!(matches!(ast.get_node(*else_block), Node::Block(_, _, _)));
-                            }
-                            _ => panic!("Expected If node"),
-                        }
-                    }
-                    _ => panic!("Expected Block node"),
-                }
-            }
-            _ => panic!("Expected Func node"),
-        }
+    fn test_arithmetic_expressions() {
+        roundtrip_contains("fn main() -> i32 { return 1 + 2; }", &["1 + 2", "-> i32"]);
+        roundtrip_contains("fn main() { return 5 + 10; }", &["5 + 10"]);
     }
     
     #[test]
-    fn test_parse_let_statement() {
-        let input = r#"
-            fn main() -> void {
-                let x = 42;
-            }
-        "#;
+    fn test_comparison_operators() {
+        roundtrip_contains("fn main() -> bool { return true == false; }", &["true == false", "-> bool"]);
+        roundtrip_contains("fn main() { return local_0 != 5; }", &["local_0 != 5"]);
+    }
+    
+    #[test]
+    fn test_string_literals() {
+        roundtrip_contains(r#"fn main() { return "Hello"; }"#, &[r#""Hello""#]);
+        roundtrip_contains(r#"fn main() { return "Hello World"; }"#, &[r#""Hello World""#]);
+    }
+    
+    #[test]
+    fn test_string_escaping() {
+        // Test various escape sequences
+        let escaped_input = r#"fn main() { return "Hello \"World\"\nNew line\tTab\\Backslash"; }"#;
+        roundtrip_contains(escaped_input, &[r#""Hello \"World\"\nNew line\tTab\\Backslash""#]);
         
-        let ast = parse_program(input).unwrap();
-        let root = ast.get_root().unwrap();
+        // Test that control characters get properly escaped
+        let control_input = "fn main() { return \"Hello\x01\x02World\"; }";
+        roundtrip_contains(control_input, &[r#"Hello\u{0001}\u{0002}World"#]);
+    }
+    
+    #[test]
+    fn test_variable_declarations() {
+        roundtrip_contains("fn main() { let x = 42; }", &["let", "42"]);
+        roundtrip_contains("fn main() { let y = true; }", &["let", "true"]);
+    }
+    
+    #[test]
+    fn test_if_statements() {
+        roundtrip_contains("fn main() { if true { return 1; } }", &["if", "true", "return 1"]);
         
-        match ast.get_node(root) {
-            Node::Func(_, _, body, _) => {
-                match ast.get_node(*body) {
-                    Node::Block(_, _, first_child) => {
-                        match ast.get_node(*first_child) {
-                            Node::LocalWrite(true, _, expr) => {
-                                match ast.get_node(*expr) {
-                                    Node::ConstI32(42) => {} // Success
-                                    _ => panic!("Expected ConstI32(42)"),
-                                }
-                            }
-                            _ => panic!("Expected LocalWrite node"),
-                        }
-                    }
-                    _ => panic!("Expected Block node"),
-                }
-            }
-            _ => panic!("Expected Func node"),
+        let if_else = "fn main() { if false { return 1; } else { return 2; } }";
+        roundtrip_contains(if_else, &["if", "false", "else", "return 1", "return 2"]);
+        
+        // Test else-if chains (note: parser/printer may format with extra spaces)
+        let else_if = "fn main() { if local_0 == 1 { return 1; } else if local_0 == 2 { return 2; } else { return 0; } }";
+        roundtrip_contains(else_if, &["else", "if", "local_0 == 1", "local_0 == 2"]);
+    }
+    
+    #[test]
+    fn test_while_loops() {
+        roundtrip_contains("fn main() { while true { break; } }", &["while", "break"]);
+        roundtrip_contains("fn main() { while local_0 != 0 { continue; } }", &["while", "local_0 != 0", "continue"]);
+    }
+    
+    #[test]
+    fn test_break_continue() {
+        roundtrip_contains("fn main() { while true { break; } }", &["break"]);
+        roundtrip_contains("fn main() { while true { continue; } }", &["continue"]);
+        
+        let nested = "fn main() { while true { if local_0 == 5 { break; } else { continue; } } }";
+        roundtrip_contains(nested, &["break", "continue", "local_0 == 5"]);
+    }
+    
+    #[test]
+    fn test_function_parameters() {
+        roundtrip_contains("fn main(x: i32) -> i32 { return x; }", &["local_0: i32", "-> i32", "return local_0"]);
+        
+        let multi_param = "fn main(a: i32, b: bool) -> i32 { return a; }";
+        roundtrip_contains(multi_param, &["local_0: i32", "local_1: bool", "-> i32"]);
+    }
+    
+    #[test]
+    fn test_nested_blocks() {
+        roundtrip_contains("fn main() { { return 42; } }", &["return 42"]);
+    }
+    
+    #[test]
+    fn test_complex_expressions() {
+        // Test nested arithmetic
+        roundtrip_contains("fn main() -> i32 { return 1 + 2 + 3; }", &["1 + 2 + 3"]);
+        
+        // Test mixed operators
+        roundtrip_contains("fn main() -> bool { return 1 + 2 == 3; }", &["1 + 2 == 3"]);
+    }
+    
+    #[test]
+    fn test_boolean_literals() {
+        roundtrip_contains("fn main() -> bool { return true; }", &["return true"]);
+        roundtrip_contains("fn main() -> bool { return false; }", &["return false"]);
+    }
+    
+    #[test]
+    fn test_function_return_types() {
+        // Test void (no arrow)
+        let void_fn = roundtrip("fn main() { return; }");
+        assert!(!void_fn.contains("->"));
+        
+        // Test explicit return types
+        roundtrip_contains("fn main() -> i32 { return 42; }", &["-> i32"]);
+        roundtrip_contains("fn main() -> bool { return true; }", &["-> bool"]);
+    }
+    
+    #[test]
+    fn test_parse_error_handling() {
+        let malformed_inputs = [
+            "fn main(",           // Missing closing paren
+            "fn main() {",        // Missing closing brace
+            "fn main() { return", // Missing semicolon and value
+            "fn main() { 1 +",    // Incomplete expression
+        ];
+        
+        for input in &malformed_inputs {
+            let result = parse_program(input);
+            assert!(result.is_err(), "Expected parse error for input: {}", input);
         }
     }
 }
