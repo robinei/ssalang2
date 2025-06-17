@@ -19,28 +19,52 @@ impl<'a> CodeFormatter<'a> {
     pub fn format(mut self) -> String {
         let tokens = self.ast.get_tokens();
         let mut current_indent = 0;
+        let mut at_line_start = true;
         
         while self.current_token_index < tokens.len() {
             let token = &tokens[self.current_token_index];
             
             match token.token_type {
                 TokenType::LeftBrace => {
+                    if !self.buffer.ends_with(' ') && !self.buffer.is_empty() {
+                        self.buffer.push(' ');
+                    }
                     self.emit_current_token(current_indent);
-                    self.buffer.push('\n');
                     current_indent += 1;
+                    at_line_start = false;
                 }
                 TokenType::RightBrace => {
                     current_indent = current_indent.saturating_sub(1);
-                    self.buffer.push('\n');
+                    if !at_line_start {
+                        self.buffer.push('\n');
+                    }
                     self.emit_indent(current_indent);
                     self.emit_current_token(current_indent);
+                    at_line_start = false;
                 }
                 TokenType::Semicolon => {
                     self.emit_current_token(current_indent);
-                    self.buffer.push('\n');
+                    at_line_start = false;
+                }
+                TokenType::Newline => {
+                    self.emit_current_token(current_indent);
+                    at_line_start = true;
+                }
+                TokenType::Comment => {
+                    if at_line_start {
+                        self.emit_indent(current_indent);
+                    } else if !self.buffer.ends_with(' ') {
+                        self.buffer.push(' ');
+                    }
+                    self.emit_current_token(current_indent);
+                    at_line_start = false;
                 }
                 _ => {
+                    if at_line_start && !matches!(token.token_type, TokenType::Comment | TokenType::Newline) {
+                        self.emit_indent(current_indent);
+                    }
                     self.emit_current_token(current_indent);
+                    at_line_start = false;
                 }
             }
             
@@ -50,7 +74,7 @@ impl<'a> CodeFormatter<'a> {
     }
     
     /// Emit the current token at current_token_index position
-    fn emit_current_token(&mut self, indent: usize) {
+    fn emit_current_token(&mut self, _indent: usize) {
         let tokens = self.ast.get_tokens();
         if self.current_token_index >= tokens.len() {
             return;
@@ -61,16 +85,7 @@ impl<'a> CodeFormatter<'a> {
         match token.token_type {
             TokenType::Comment => {
                 let comment_text = self.get_token_text(token).to_string();
-                
-                if !self.buffer.is_empty() && !self.buffer.ends_with('\n') {
-                    // Inline comment - single space separation
-                    self.buffer.push(' ');
-                    self.buffer.push_str(&comment_text);
-                } else {
-                    // Standalone comment - align with current indentation  
-                    self.emit_indent(indent);
-                    self.buffer.push_str(&comment_text);
-                }
+                self.buffer.push_str(&comment_text);
             }
             
             TokenType::Newline => {
@@ -112,7 +127,16 @@ impl<'a> CodeFormatter<'a> {
             }
             
             // Handle punctuation that needs space after
-            TokenType::Arrow | TokenType::Comma => {
+            TokenType::Arrow => {
+                let token_text = self.get_token_text(token).to_string();
+                if !self.buffer.ends_with(' ') && !self.buffer.is_empty() {
+                    self.buffer.push(' ');
+                }
+                self.buffer.push_str(&token_text);
+                self.buffer.push(' ');
+            }
+            
+            TokenType::Comma => {
                 let token_text = self.get_token_text(token).to_string();
                 self.buffer.push_str(&token_text);
                 self.buffer.push(' ');
@@ -159,7 +183,7 @@ impl<'a> CodeFormatter<'a> {
 
     fn emit_indent(&mut self, indent: usize) {
         for _ in 0..indent {
-            self.buffer.push_str("  ");
+            self.buffer.push_str("    ");
         }
     }
 }
@@ -171,72 +195,42 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn test_comment_formatting() {
-        let input = r#"// This is a comment
-fn main() {
-    // Another comment
-    return 42; // Inline comment
-}"#;
-        
+    fn roundtrip(input: &str) {
         let ast = Parser::parse(input).unwrap();
         let formatter = CodeFormatter::new(&ast);
         let output = formatter.format();
-        
-        // Just check that it contains the function
-        assert!(output.contains("fn main"));
-        assert!(output.contains("return 42"));
+        assert_eq!(input, output);
+    }
+
+    #[test]
+    fn test_comment_formatting() {
+        roundtrip(r#"// This is a comment
+fn main() {
+    // Another comment
+    return 42; // Inline comment
+}"#);
     }
 
     #[test]
     fn test_comprehensive_formatting_roundtrip() {
-        let input = r#"// File header comment
+        roundtrip(r#"// File header comment
 // Another header line
 
 // Function documentation
 fn main(x: i32, y: bool) -> i32 {
     // Simple return with comment
     return 42; // Inline comment
-} // End of function"#;
-        
-        // Test that input can be parsed and formatted
-        let ast = Parser::parse(input).unwrap();
-        let formatter = CodeFormatter::new(&ast);
-        let output = formatter.format();
-        
-        // Test that the output can be parsed again (verifies it's valid syntax)
-        let _ast2 = Parser::parse(&output).expect("Pretty-printed output should be valid syntax");
-        
-        // Verify key structural elements are preserved
-        assert!(output.contains("fn main"));
-        assert!(output.contains("x: i32"));
-        assert!(output.contains("y: bool"));
-        assert!(output.contains("-> i32"));
-        assert!(output.contains("return 42"));
+} // End of function"#);
     }
 
     #[test]
     fn test_edge_case_formatting_tokens() {
         // Test various edge cases for formatting token placement
-        let input = r#"// Leading comment
+        roundtrip(r#"// Leading comment
 
 fn main() -> bool {
     return true;
 }
-// Trailing comment"#;
-        
-        let ast = Parser::parse(input).unwrap();
-        let formatter = CodeFormatter::new(&ast);
-        let output = formatter.format();
-        
-        // Verify it can round-trip
-        let _ast2 = Parser::parse(&output).expect("Edge case output should be valid syntax");
-        
-        // Check that comments and structure are preserved
-        assert!(output.contains("// Leading comment"));
-        assert!(output.contains("fn main()"));
-        assert!(output.contains("-> bool"));
-        assert!(output.contains("return true"));
-        assert!(output.contains("// Trailing comment"));
+// Trailing comment"#);
     }
 }
