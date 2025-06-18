@@ -1,6 +1,13 @@
 use crate::ast::*;
 use crate::lexer::{Lexer, Token, TokenType};
-use smallvec::SmallVec;
+use std::collections::HashMap;
+
+// Cleanup operations for scope management
+#[derive(Debug, Clone)]
+enum ScopeCleanup {
+    Delete(SymbolRef, ScopeIndex),           // Remove binding when exiting scope
+    Replace(SymbolRef, LocalIndex, ScopeIndex), // Restore shadowed binding when exiting scope
+}
 
 pub struct Parser {
     tokens: Vec<Token>,
@@ -8,6 +15,13 @@ pub struct Parser {
     current_token: Token,
     source: String,
     ast: Ast,
+    
+    // Scope management for local bindings
+    binding_map: HashMap<SymbolRef, LocalIndex>,  // Current symbol -> local index mappings
+    cleanup_stack: Vec<ScopeCleanup>,            // Stack of cleanup operations
+    next_scope_id: ScopeIndex,                   // Counter for unique scope IDs
+    current_function_locals: Vec<Local>,         // Locals for current function being parsed
+    scope_stack: Vec<ScopeIndex>,                // Stack of currently active scope IDs
 }
 
 #[derive(Debug)]
@@ -32,6 +46,11 @@ impl Parser {
             current_token: Token::new(TokenType::Eof, 0, 0),
             source,
             ast: Ast::new(),
+            binding_map: HashMap::new(),
+            cleanup_stack: Vec::new(),
+            next_scope_id: 1, // Start scope IDs at 1 (0 can be reserved for global/invalid)
+            current_function_locals: Vec::new(),
+            scope_stack: Vec::new(),
         };
         
         // Get first non-formatting token
@@ -106,14 +125,23 @@ impl Parser {
             return Err(ParseError::new("Expected function name".to_string(), self.current_token.start));
         }
         
+        // Enter function scope for parameters and body
+        let function_scope_id = self.enter_scope();
+        
+        // Start fresh local tracking for this function
+        self.current_function_locals.clear();
+        
         self.expect(TokenType::LeftParen)?;
         
-        // Parse parameters
-        let mut locals: SmallVec<[Local; 8]> = SmallVec::new();
+        // Parse parameters and bind them in function scope
         if self.current_token.token_type != TokenType::RightParen {
             loop {
                 let param = self.parse_parameter()?;
-                locals.push(param);
+                
+                // Bind parameter in function scope  
+                let local_index = self.current_function_locals.len() as LocalIndex;
+                self.bind_local(param.name, local_index, function_scope_id);
+                self.current_function_locals.push(param);
                 
                 if self.current_token.token_type == TokenType::Comma {
                     self.advance();
@@ -134,17 +162,20 @@ impl Parser {
             self.ast.add_node(Node::TypeAtom(TypeAtom::Void), self.create_node_info_at(self.token_index))
         };
         
-        // Parse function body
-        let body = self.parse_block()?;
+        // Parse function body (will create its own nested scope)
+        let body = self.parse_block_with_scope(function_scope_id)?;
+        
+        // Exit function scope
+        self.exit_scope(function_scope_id);
         
         // Add locals to the AST
-        let locals_ref = if locals.is_empty() {
+        let locals_ref = if self.current_function_locals.is_empty() {
             LocalsRef::empty()
         } else {
-            self.ast.add_locals(&locals)
+            self.ast.add_locals(&self.current_function_locals)
         };
         
-        // Create function node
+        // Create function node with scope information
         let func_node = Node::Func(flags, locals_ref, body, return_type);
         Ok(self.ast.add_node(func_node, self.create_node_info_at(start_token_index)))
     }
@@ -189,25 +220,39 @@ impl Parser {
         Ok(self.ast.add_node(Node::TypeAtom(type_atom), self.create_node_info_at(start_token_index)))
     }
     
-    // Parse a block statement
+    // Parse a block statement (creates its own scope)
     fn parse_block(&mut self) -> ParseResult<NodeRef> {
+        let block_scope_id = self.enter_scope();
+        let result = self.parse_block_with_scope(block_scope_id);
+        self.exit_scope(block_scope_id);
+        result
+    }
+    
+    // Parse a block statement with a specific scope ID
+    fn parse_block_with_scope(&mut self, scope_id: ScopeIndex) -> ParseResult<NodeRef> {
         let start_token_index = self.token_index;
         
         self.expect(TokenType::LeftBrace)?;
         
         let flags = Flags::new();
         
-        // For now, just parse the first statement as the block content
-        let first_child = if self.current_token.token_type == TokenType::RightBrace {
-            // Empty block - create a void expression
-            self.ast.add_node(Node::TypeAtom(TypeAtom::Void), self.create_node_info_at(self.token_index))
-        } else {
-            self.parse_statement()?
-        };
+        // Parse all statements in the block
+        let mut statements = Vec::new();
+        
+        while self.current_token.token_type != TokenType::RightBrace {
+            statements.push(self.parse_statement()?);
+        }
         
         self.expect(TokenType::RightBrace)?;
         
-        let block_node = Node::Block(flags, 0, first_child);
+        // Add statements to AST and get reference
+        let statements_ref = if statements.is_empty() {
+            StatementsRef::empty()
+        } else {
+            self.ast.add_statements(&statements)
+        };
+        
+        let block_node = Node::Block(flags, scope_id, statements_ref);
         Ok(self.ast.add_node(block_node, self.create_node_info_at(start_token_index)))
     }
     
@@ -273,9 +318,13 @@ impl Parser {
             ty: var_type,
         };
         
-        // Add the local and get its index
-        let locals_ref = self.ast.add_locals(&[local]);
-        let local_index = locals_ref.offset; // This local is at offset 0 in its own LocalsRef
+        // Add to function locals and bind in current scope
+        let local_index = self.current_function_locals.len() as LocalIndex;
+        self.current_function_locals.push(local);
+        
+        // Get current scope for binding
+        let current_scope = *self.scope_stack.last().expect("Should be in a scope when parsing let statement");
+        self.bind_local(name_ref, local_index, current_scope);
         
         // Create a LocalWrite node (is_definition=true, with proper local_index)
         let local_write = Node::LocalWrite(true, local_index, expr);
@@ -303,8 +352,8 @@ impl Parser {
         } else {
             // No else clause - create empty block
             let flags = Flags::new();
-            let void_node = self.ast.add_node(Node::TypeAtom(TypeAtom::Void), self.create_node_info_at(self.token_index));
-            self.ast.add_node(Node::Block(flags, 0, void_node), self.create_node_info_at(self.token_index))
+            let empty_statements = StatementsRef::empty();
+            self.ast.add_node(Node::Block(flags, 0, empty_statements), self.create_node_info_at(self.token_index))
         };
         
         let flags = Flags::new();
@@ -484,24 +533,20 @@ impl Parser {
                 let identifier_text = self.get_token_text(&token).to_string();
                 self.advance();
                 
-                // For now, create a temporary local for this identifier
-                // In a real implementation, this would do proper symbol table lookup
-                let name_ref = self.ast.add_symbol(identifier_text);
-                let var_type = self.ast.add_node(Node::TypeAtom(TypeAtom::I32), self.create_node_info_at(start_token_index));
-                let local = Local {
-                    name: name_ref,
-                    is_param: false,
-                    is_static: false,
-                    is_const: false,
-                    ty: var_type,
-                };
+                // Look up identifier in binding map
+                let name_ref = self.ast.add_symbol(identifier_text.clone());
                 
-                // Add the local and get its index
-                let locals_ref = self.ast.add_locals(&[local]);
-                let local_index = locals_ref.offset;
-                
-                let local_read = Node::LocalRead(local_index);
-                Ok(self.ast.add_node(local_read, self.create_node_info_at(start_token_index)))
+                if let Some(local_index) = self.lookup_local(name_ref) {
+                    // Found binding - create LocalRead
+                    let local_read = Node::LocalRead(local_index);
+                    Ok(self.ast.add_node(local_read, self.create_node_info_at(start_token_index)))
+                } else {
+                    // Identifier not found in current scope
+                    return Err(ParseError::new(
+                        format!("Undefined variable: {}", identifier_text),
+                        token.start,
+                    ));
+                }
             }
             
             TokenType::LeftParen => {
@@ -566,6 +611,67 @@ impl Parser {
         NodeInfo::new(token_index)
     }
 
+    // Scope management methods
+    
+    /// Enter a new scope and return its unique ID
+    fn enter_scope(&mut self) -> ScopeIndex {
+        let scope_id = self.next_scope_id;
+        self.next_scope_id += 1;
+        self.scope_stack.push(scope_id);
+        scope_id
+    }
+    
+    /// Exit a scope by applying all cleanup operations for that scope
+    fn exit_scope(&mut self, scope_id: ScopeIndex) {
+        // Verify we're exiting the most recent scope
+        if let Some(&top_scope) = self.scope_stack.last() {
+            assert_eq!(top_scope, scope_id, "Exiting scope out of order");
+            self.scope_stack.pop();
+        }
+        
+        // Pop and apply cleanup operations until we've handled all for this scope
+        while let Some(cleanup) = self.cleanup_stack.last() {
+            let cleanup_scope = match cleanup {
+                ScopeCleanup::Delete(_, scope) => *scope,
+                ScopeCleanup::Replace(_, _, scope) => *scope,
+            };
+            
+            if cleanup_scope != scope_id {
+                break; // We've finished this scope's cleanup operations
+            }
+            
+            // Remove and apply the cleanup operation
+            let cleanup = self.cleanup_stack.pop().unwrap();
+            match cleanup {
+                ScopeCleanup::Delete(symbol, _) => {
+                    self.binding_map.remove(&symbol);
+                }
+                ScopeCleanup::Replace(symbol, old_local_index, _) => {
+                    self.binding_map.insert(symbol, old_local_index);
+                }
+            }
+        }
+    }
+    
+    /// Bind a symbol to a local index, handling shadowing
+    fn bind_local(&mut self, symbol: SymbolRef, local_index: LocalIndex, scope_id: ScopeIndex) {
+        if let Some(old_local_index) = self.binding_map.get(&symbol) {
+            // Symbol is being shadowed - save the old binding for restoration
+            self.cleanup_stack.push(ScopeCleanup::Replace(symbol, *old_local_index, scope_id));
+        } else {
+            // New binding - mark for deletion when scope exits
+            self.cleanup_stack.push(ScopeCleanup::Delete(symbol, scope_id));
+        }
+        
+        // Update current binding
+        self.binding_map.insert(symbol, local_index);
+    }
+    
+    /// Look up the current binding for a symbol
+    fn lookup_local(&self, symbol: SymbolRef) -> Option<LocalIndex> {
+        self.binding_map.get(&symbol).copied()
+    }
+
     pub fn parse(input: &str) -> ParseResult<Ast> {
         // Tokenize everything to get the full token stream
         let mut lexer = Lexer::new(input);
@@ -611,7 +717,7 @@ mod tests {
     #[test]
     fn test_comparison_operators() {
         roundtrip("fn main() -> bool { return true == false; }");
-        roundtrip("fn main() { return local_0 != 5; }");
+        roundtrip("fn main() { let x = 10; return x != 5; }");
     }
     
     #[test]
@@ -641,13 +747,13 @@ mod tests {
         roundtrip("fn main() { if false { return 1; } else { return 2; } }");
         
         // Test else-if chains
-        roundtrip("fn main() { if local_0 == 1 { return 1; } else if local_0 == 2 { return 2; } else { return 0; } }");
+        roundtrip("fn main() { let x = 0; if x == 1 { return 1; } else if x == 2 { return 2; } else { return 0; } }");
     }
     
     #[test]
     fn test_while_loops() {
         roundtrip("fn main() { while true { break; } }");
-        roundtrip("fn main() { while local_0 != 0 { continue; } }");
+        roundtrip("fn main() { let x = 5; while x != 0 { continue; } }");
     }
     
     #[test]
@@ -655,7 +761,7 @@ mod tests {
         roundtrip("fn main() { while true { break; } }");
         roundtrip("fn main() { while true { continue; } }");
         
-        roundtrip("fn main() { while true { if local_0 == 5 { break; } else { continue; } } }");
+        roundtrip("fn main() { let x = 5; while true { if x == 5 { break; } else { continue; } } }");
     }
     
     #[test]
@@ -708,5 +814,29 @@ mod tests {
             let result = Parser::parse(input);
             assert!(result.is_err(), "Expected parse error for input: {}", input);
         }
+    }
+    
+    #[test]
+    fn test_scope_management() {
+        // Test basic variable declaration and usage
+        roundtrip("fn main() { let x = 42; return x; }");
+        
+        // Test parameter usage
+        roundtrip("fn main(x: i32) -> i32 { return x; }");
+        
+        // Test variable in nested blocks
+        roundtrip("fn main() { let x = 1; { let y = 2; return y; } }");
+    }
+    
+    #[test]
+    fn test_multiple_statements_in_blocks() {
+        // Test multiple statements in function body
+        roundtrip("fn main() { let x = 1; let y = 2; return x; }");
+        
+        // Test multiple statements in nested blocks
+        roundtrip("fn main() { let x = 1; { let y = 2; let z = 3; return z; } }");
+        
+        // Test multiple statements in control structures
+        roundtrip("fn main() { let x = 1; if x == 1 { let y = 2; return y; } else { let z = 3; return z; } }");
     }
 }

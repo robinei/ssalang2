@@ -68,7 +68,7 @@ impl<'a> PrettyPrinter<'a> {
                 let var_name = self.ast.get_local_name(*local_index);
                 self.buffer.push_str(var_name);
             }
-            Node::Block(flags, _scope_index, first_child) => {
+            Node::Block(flags, _scope_index, statements_ref) => {
                 if flags.is_static() {
                     self.buffer.push_str("static ");
                 }
@@ -77,7 +77,15 @@ impl<'a> PrettyPrinter<'a> {
                 }
                 
                 self.buffer.push_str("{ ");
-                self.print_node(*first_child, 0);
+                
+                let statements = self.ast.get_statements(*statements_ref);
+                for (i, &statement) in statements.iter().enumerate() {
+                    if i > 0 {
+                        self.buffer.push(' ');
+                    }
+                    self.print_node(statement, 0);
+                }
+                
                 self.buffer.push_str(" }");
             }
             Node::If(flags, _scope_index, cond, then_branch, else_branch) => {
@@ -237,9 +245,9 @@ impl<'a> PrettyPrinter<'a> {
     }
 
     fn is_empty_block(&self, node_ref: NodeRef) -> bool {
-        // Check if this is a Block containing only a void node
-        if let Node::Block(_, _, first_child) = self.ast.get_node(node_ref) {
-            matches!(self.ast.get_node(*first_child), Node::TypeAtom(TypeAtom::Void))
+        // Check if this is a Block with no statements
+        if let Node::Block(_, _, statements_ref) = self.ast.get_node(node_ref) {
+            statements_ref.count == 0
         } else {
             false
         }

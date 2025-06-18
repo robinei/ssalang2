@@ -59,6 +59,22 @@ impl LocalsRef {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct StatementsRef {
+    pub offset: u16,
+    pub count: u16,
+}
+
+impl StatementsRef {
+    pub fn new(offset: u16, count: u16) -> Self {
+        Self { offset, count }
+    }
+
+    pub fn empty() -> Self {
+        Self { offset: 0, count: 0 }
+    }
+}
+
 // Flags for packing boolean values across all AST node types
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Flags(u8);
@@ -127,7 +143,7 @@ pub enum Node {
     LocalRead(LocalIndex), // local_index
     
     // Control flow nodes
-    Block(Flags, ScopeIndex, NodeRef), // flags, scope_index, first_child
+    Block(Flags, ScopeIndex, StatementsRef), // flags, scope_index, statements
     If(Flags, ScopeIndex, NodeRef, NodeRef, NodeRef), // flags, scope_index, cond, then, els
     While(Flags, ScopeIndex, NodeRef, NodeRef), // flags, scope_index, cond, body
     
@@ -168,6 +184,7 @@ pub struct Ast {
     nodes: Vec<Node>,         // All AST nodes
     node_info: Vec<NodeInfo>, // Per-node metadata (source location, etc.)
     locals: Vec<Local>,       // Flat array of all locals across all functions
+    statements: Vec<NodeRef>, // Flat array of all statements in blocks
     strings: Vec<String>,     // String storage for string literals
     symbols: Vec<String>,     // Symbol storage for identifiers (interned)
     symbol_map: std::collections::HashMap<String, SymbolRef>, // For symbol interning
@@ -182,6 +199,7 @@ impl Ast {
             nodes: Vec::new(),
             node_info: Vec::new(),
             locals: Vec::new(),
+            statements: Vec::new(),
             strings: Vec::new(),
             symbols: Vec::new(),
             symbol_map: std::collections::HashMap::new(),
@@ -238,6 +256,20 @@ impl Ast {
     pub fn get_local_name(&self, index: LocalIndex) -> &str {
         let local = self.get_local(index);
         self.get_symbol(local.name)
+    }
+
+    // Statement storage methods
+    pub fn add_statements(&mut self, statements: &[NodeRef]) -> StatementsRef {
+        let offset = self.statements.len() as u16;
+        let count = statements.len() as u16;
+        self.statements.extend_from_slice(statements);
+        StatementsRef::new(offset, count)
+    }
+
+    pub fn get_statements(&self, statements_ref: StatementsRef) -> &[NodeRef] {
+        let start = statements_ref.offset as usize;
+        let end = start + (statements_ref.count as usize);
+        &self.statements[start..end]
     }
 
     // String storage methods (for string literals)
