@@ -162,7 +162,7 @@ impl Parser {
         self.expect(TokenType::Colon)?;
         let param_type = self.parse_type()?;
         
-        let name_ref = self.ast.add_string(param_name);
+        let name_ref = self.ast.add_symbol(param_name);
         
         Ok(Local {
             name: name_ref,
@@ -262,7 +262,7 @@ impl Parser {
         }
         
         // Create a Local entry for this variable
-        let name_ref = self.ast.add_string(var_name);
+        let name_ref = self.ast.add_symbol(var_name);
         // For now, assume i32 type - in a real implementation this would be inferred
         let var_type = self.ast.add_node(Node::TypeAtom(TypeAtom::I32), self.create_node_info_at(self.token_index));
         let local = Local {
@@ -486,7 +486,7 @@ impl Parser {
                 
                 // For now, create a temporary local for this identifier
                 // In a real implementation, this would do proper symbol table lookup
-                let name_ref = self.ast.add_string(identifier_text);
+                let name_ref = self.ast.add_symbol(identifier_text);
                 let var_type = self.ast.add_node(Node::TypeAtom(TypeAtom::I32), self.create_node_info_at(start_token_index));
                 let local = Local {
                     name: name_ref,

@@ -164,7 +164,7 @@ impl<'a> PrettyPrinter<'a> {
                     if i > 0 {
                         self.buffer.push_str(", ");
                     }
-                    let param_name = self.ast.get_string(local.name);
+                    let param_name = self.ast.get_symbol(local.name);
                     self.buffer.push_str(param_name);
                     self.buffer.push_str(": ");
                     self.print_node(local.ty, 0);

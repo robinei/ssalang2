@@ -31,6 +31,19 @@ impl StringRef {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SymbolRef(u32);
+
+impl SymbolRef {
+    pub fn new(value: u32) -> Self {
+        Self(value)
+    }
+
+    pub fn get(self) -> u32 {
+        self.0
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct LocalsRef {
     pub offset: u16,
     pub count: u16,
@@ -142,7 +155,7 @@ impl NodeInfo {
 // Separate structure for local variable metadata (used in function contexts)
 #[derive(Debug, Clone)]
 pub struct Local {
-    pub name: StringRef,
+    pub name: SymbolRef,
     pub is_param: bool,
     pub is_static: bool,
     pub is_const: bool,
@@ -155,7 +168,9 @@ pub struct Ast {
     nodes: Vec<Node>,         // All AST nodes
     node_info: Vec<NodeInfo>, // Per-node metadata (source location, etc.)
     locals: Vec<Local>,       // Flat array of all locals across all functions
-    strings: Vec<String>,     // String storage
+    strings: Vec<String>,     // String storage for string literals
+    symbols: Vec<String>,     // Symbol storage for identifiers (interned)
+    symbol_map: std::collections::HashMap<String, SymbolRef>, // For symbol interning
     tokens: Vec<Token>,       // Full token stream including formatting tokens
     source: String,           // Original source text for token text extraction
     root: Option<NodeRef>,    // Root node of the tree
@@ -168,6 +183,8 @@ impl Ast {
             node_info: Vec::new(),
             locals: Vec::new(),
             strings: Vec::new(),
+            symbols: Vec::new(),
+            symbol_map: std::collections::HashMap::new(),
             tokens: Vec::new(),
             source: String::new(),
             root: None,
@@ -220,10 +237,10 @@ impl Ast {
     
     pub fn get_local_name(&self, index: LocalIndex) -> &str {
         let local = self.get_local(index);
-        self.get_string(local.name)
+        self.get_symbol(local.name)
     }
 
-    // String storage methods
+    // String storage methods (for string literals)
     pub fn add_string(&mut self, string: String) -> StringRef {
         let string_ref = StringRef::new(self.strings.len() as u32);
         self.strings.push(string);
@@ -233,6 +250,25 @@ impl Ast {
     pub fn get_string(&self, string_ref: StringRef) -> &str {
         let index = string_ref.get() as usize;
         &self.strings[index]
+    }
+
+    // Symbol storage methods (for identifiers, interned)
+    pub fn add_symbol(&mut self, symbol: String) -> SymbolRef {
+        // Check if symbol already exists (interning)
+        if let Some(&existing_ref) = self.symbol_map.get(&symbol) {
+            return existing_ref;
+        }
+
+        // Add new symbol
+        let symbol_ref = SymbolRef::new(self.symbols.len() as u32);
+        self.symbols.push(symbol.clone());
+        self.symbol_map.insert(symbol, symbol_ref);
+        symbol_ref
+    }
+
+    pub fn get_symbol(&self, symbol_ref: SymbolRef) -> &str {
+        let index = symbol_ref.get() as usize;
+        &self.symbols[index]
     }
 
     // Token storage methods
@@ -252,4 +288,37 @@ impl Ast {
         &self.source
     }
 
+    // Debug method to check symbol interning
+    #[cfg(test)]
+    pub fn symbol_count(&self) -> usize {
+        self.symbols.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_symbol_interning() {
+        let mut ast = Ast::new();
+        
+        // Add the same symbol multiple times
+        let sym1 = ast.add_symbol("test".to_string());
+        let sym2 = ast.add_symbol("test".to_string());
+        let sym3 = ast.add_symbol("different".to_string());
+        let sym4 = ast.add_symbol("test".to_string());
+        
+        // Should only have 2 unique symbols stored
+        assert_eq!(ast.symbol_count(), 2);
+        
+        // Same symbol name should return same reference
+        assert_eq!(sym1, sym2);
+        assert_eq!(sym1, sym4);
+        assert_ne!(sym1, sym3);
+        
+        // Verify we can get back the correct strings
+        assert_eq!(ast.get_symbol(sym1), "test");
+        assert_eq!(ast.get_symbol(sym3), "different");
+    }
 }
