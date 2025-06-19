@@ -158,7 +158,7 @@ impl<'a> CodeFormatter<'a> {
             
             // Handle literal and type tokens
             TokenType::IntLiteral | TokenType::True | TokenType::False | TokenType::StringLiteral | TokenType::Identifier |
-            TokenType::Bool | TokenType::I32 | TokenType::Void => {
+            TokenType::Bool | TokenType::I32 => {
                 let token_text = self.get_token_text(token).to_string();
                 self.buffer.push_str(&token_text);
             }

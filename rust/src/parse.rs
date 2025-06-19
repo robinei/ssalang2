@@ -1,5 +1,6 @@
 use crate::ast::*;
 use crate::lexer::{Lexer, Token, TokenType};
+use smallvec::SmallVec;
 use std::collections::HashMap;
 
 // Cleanup operations for scope management
@@ -158,8 +159,8 @@ impl Parser {
             self.advance();
             self.parse_type()?
         } else {
-            // Default to void
-            self.ast.add_node(Node::TypeAtom(TypeAtom::Void), self.create_node_info_at(self.token_index))
+            // Default to unit
+            self.ast.add_node(Node::TypeAtom(TypeAtom::Unit), NodeInfo::new(self.token_index))
         };
         
         // Parse function body (will create its own nested scope)
@@ -177,7 +178,7 @@ impl Parser {
         
         // Create function node with scope information
         let func_node = Node::Func(flags, locals_ref, body, return_type);
-        Ok(self.ast.add_node(func_node, self.create_node_info_at(start_token_index)))
+        Ok(self.ast.add_node(func_node, NodeInfo::new(start_token_index)))
     }
     
     // Parse a function parameter
@@ -209,15 +210,27 @@ impl Parser {
         let start_token_index = self.token_index;
         let token = self.current_token;
         
-        let type_atom = match &token.token_type {
-            TokenType::Bool => TypeAtom::Bool,
-            TokenType::I32 => TypeAtom::I32,
-            TokenType::Void => TypeAtom::Void,
-            _ => return Err(ParseError::new("Expected type".to_string(), token.start)),
-        };
-        
-        self.advance();
-        Ok(self.ast.add_node(Node::TypeAtom(type_atom), self.create_node_info_at(start_token_index)))
+        match &token.token_type {
+            TokenType::Bool => {
+                self.advance();
+                Ok(self.ast.add_node(Node::TypeAtom(TypeAtom::Bool), NodeInfo::new(start_token_index)))
+            },
+            TokenType::I32 => {
+                self.advance();
+                Ok(self.ast.add_node(Node::TypeAtom(TypeAtom::I32), NodeInfo::new(start_token_index)))
+            },
+            TokenType::LeftParen => {
+                // Parse () as unit type
+                self.advance(); // consume '('
+                if self.current_token.token_type == TokenType::RightParen {
+                    self.advance(); // consume ')'
+                    Ok(self.ast.add_node(Node::TypeAtom(TypeAtom::Unit), NodeInfo::new(start_token_index)))
+                } else {
+                    Err(ParseError::new("Expected ')' after '(' in unit type".to_string(), self.current_token.start))
+                }
+            },
+            _ => Err(ParseError::new("Expected type".to_string(), token.start)),
+        }
     }
     
     // Parse a block statement (creates its own scope)
@@ -237,41 +250,72 @@ impl Parser {
         let flags = Flags::new();
         
         // Parse all statements in the block
-        let mut statements = Vec::new();
+        let mut statements: SmallVec<[NodeRef; 64]> = SmallVec::new();
+        let mut last_had_semicolon = false;
         
         while self.current_token.token_type != TokenType::RightBrace {
-            statements.push(self.parse_statement()?);
+            let (stmt, had_semicolon) = self.parse_statement_with_semicolon_info()?;
+            statements.push(stmt);
+            last_had_semicolon = had_semicolon;
+        }
+        
+        // If empty block OR last statement had semicolon, add ConstUnit
+        if statements.is_empty() || last_had_semicolon {
+            let unit_node = self.ast.add_node(Node::ConstUnit, NodeInfo::new(self.token_index));
+            statements.push(unit_node);
         }
         
         self.expect(TokenType::RightBrace)?;
         
         // Add statements to AST and get reference
-        let statements_ref = if statements.is_empty() {
-            StatementsRef::empty()
-        } else {
-            self.ast.add_statements(&statements)
-        };
+        let statements_ref = self.ast.add_statements(&statements);
         
         let block_node = Node::Block(flags, scope_id, statements_ref);
-        Ok(self.ast.add_node(block_node, self.create_node_info_at(start_token_index)))
+        Ok(self.ast.add_node(block_node, NodeInfo::new(start_token_index)))
     }
     
-    // Parse a statement
-    fn parse_statement(&mut self) -> ParseResult<NodeRef> {
+    // Parse a statement and return whether it ended with a semicolon
+    fn parse_statement_with_semicolon_info(&mut self) -> ParseResult<(NodeRef, bool)> {
         match &self.current_token.token_type {
-            TokenType::Let => self.parse_let_statement(),
-            TokenType::If => self.parse_if_statement(),
-            TokenType::While => self.parse_while_statement(),
-            TokenType::Return => self.parse_return_statement(),
-            TokenType::Break => self.parse_break_statement(),
-            TokenType::Continue => self.parse_continue_statement(),
-            TokenType::LeftBrace => self.parse_block(),
+            // Statement-only forms (always have semicolons conceptually)
+            TokenType::Let => {
+                let stmt = self.parse_let_statement()?;
+                Ok((stmt, true)) // Let statements always end with semicolon
+            },
+            TokenType::Return => {
+                let stmt = self.parse_return_statement()?;
+                Ok((stmt, true)) // Return statements always end with semicolon
+            },
+            TokenType::Break => {
+                let stmt = self.parse_break_statement()?;
+                Ok((stmt, true)) // Break statements always end with semicolon
+            },
+            TokenType::Continue => {
+                let stmt = self.parse_continue_statement()?;
+                Ok((stmt, true)) // Continue statements always end with semicolon
+            },
+            TokenType::While => {
+                let stmt = self.parse_while_statement()?;
+                Ok((stmt, true)) // While statements always end with semicolon (statement-only)
+            },
+            // Expression forms (can be used as final expression)
+            TokenType::If => {
+                let expr = self.parse_if_statement()?;
+                Ok((expr, false)) // If expressions don't need semicolons
+            },
+            TokenType::LeftBrace => {
+                let expr = self.parse_block()?;
+                Ok((expr, false)) // Block expressions don't need semicolons
+            },
             _ => {
                 let expr = self.parse_expression()?;
-                if self.current_token.token_type == TokenType::Semicolon {
+                let had_semicolon = if self.current_token.token_type == TokenType::Semicolon {
                     self.advance();
-                }
-                Ok(expr)
+                    true
+                } else {
+                    false
+                };
+                Ok((expr, had_semicolon))
             }
         }
     }
@@ -309,7 +353,7 @@ impl Parser {
         // Create a Local entry for this variable
         let name_ref = self.ast.add_symbol(var_name);
         // For now, assume i32 type - in a real implementation this would be inferred
-        let var_type = self.ast.add_node(Node::TypeAtom(TypeAtom::I32), self.create_node_info_at(self.token_index));
+        let var_type = self.ast.add_node(Node::TypeAtom(TypeAtom::I32), NodeInfo::new(self.token_index));
         let local = Local {
             name: name_ref,
             is_param: false,
@@ -328,7 +372,7 @@ impl Parser {
         
         // Create a LocalWrite node (is_definition=true, with proper local_index)
         let local_write = Node::LocalWrite(true, local_index, expr);
-        Ok(self.ast.add_node(local_write, self.create_node_info_at(start_token_index)))
+        Ok(self.ast.add_node(local_write, NodeInfo::new(start_token_index)))
     }
     
     // Parse if statement
@@ -353,12 +397,12 @@ impl Parser {
             // No else clause - create empty block
             let flags = Flags::new();
             let empty_statements = StatementsRef::empty();
-            self.ast.add_node(Node::Block(flags, 0, empty_statements), self.create_node_info_at(self.token_index))
+            self.ast.add_node(Node::Block(flags, 0, empty_statements), NodeInfo::new(self.token_index))
         };
         
         let flags = Flags::new();
         let if_node = Node::If(flags, 0, cond, then_block, else_block);
-        Ok(self.ast.add_node(if_node, self.create_node_info_at(start_token_index)))
+        Ok(self.ast.add_node(if_node, NodeInfo::new(start_token_index)))
     }
     
     // Parse while statement
@@ -372,7 +416,7 @@ impl Parser {
         
         let flags = Flags::new();
         let while_node = Node::While(flags, 0, cond, body);
-        Ok(self.ast.add_node(while_node, self.create_node_info_at(start_token_index)))
+        Ok(self.ast.add_node(while_node, NodeInfo::new(start_token_index)))
     }
     
     // Parse return statement
@@ -382,8 +426,8 @@ impl Parser {
         self.expect(TokenType::Return)?;
         
         let value = if self.current_token.token_type == TokenType::Semicolon {
-            // Return void
-            self.ast.add_node(Node::TypeAtom(TypeAtom::Void), self.create_node_info_at(self.token_index))
+            // Return unit
+            self.ast.add_node(Node::ConstUnit, NodeInfo::new(self.token_index))
         } else {
             self.parse_expression()?
         };
@@ -393,7 +437,7 @@ impl Parser {
         }
         
         let return_node = Node::Return(value);
-        Ok(self.ast.add_node(return_node, self.create_node_info_at(start_token_index)))
+        Ok(self.ast.add_node(return_node, NodeInfo::new(start_token_index)))
     }
     
     // Parse break statement
@@ -403,8 +447,8 @@ impl Parser {
         self.expect(TokenType::Break)?;
         
         let value = if self.current_token.token_type == TokenType::Semicolon {
-            // Break with void
-            self.ast.add_node(Node::TypeAtom(TypeAtom::Void), self.create_node_info_at(self.token_index))
+            // Break with unit
+            self.ast.add_node(Node::ConstUnit, NodeInfo::new(self.token_index))
         } else {
             self.parse_expression()?
         };
@@ -415,7 +459,7 @@ impl Parser {
         
         let flags = Flags::new();
         let break_node = Node::Break(flags, 0, value);
-        Ok(self.ast.add_node(break_node, self.create_node_info_at(start_token_index)))
+        Ok(self.ast.add_node(break_node, NodeInfo::new(start_token_index)))
     }
     
     // Parse continue statement
@@ -425,8 +469,8 @@ impl Parser {
         self.expect(TokenType::Continue)?;
         
         let value = if self.current_token.token_type == TokenType::Semicolon {
-            // Continue with void
-            self.ast.add_node(Node::TypeAtom(TypeAtom::Void), self.create_node_info_at(self.token_index))
+            // Continue with unit
+            self.ast.add_node(Node::ConstUnit, NodeInfo::new(self.token_index))
         } else {
             self.parse_expression()?
         };
@@ -437,7 +481,7 @@ impl Parser {
         
         let flags = Flags::new();
         let continue_node = Node::Continue(flags, 0, value);
-        Ok(self.ast.add_node(continue_node, self.create_node_info_at(start_token_index)))
+        Ok(self.ast.add_node(continue_node, NodeInfo::new(start_token_index)))
     }
     
     // Parse expression (handles binary operators)
@@ -463,7 +507,7 @@ impl Parser {
                 _ => unreachable!(),
             };
             
-            expr = self.ast.add_node(node, self.create_node_info_at(start_token_index));
+            expr = self.ast.add_node(node, NodeInfo::new(start_token_index));
         }
         
         Ok(expr)
@@ -479,7 +523,7 @@ impl Parser {
             
             let right = self.parse_primary()?;
             let add_node = Node::BinopAdd(expr, right);
-            expr = self.ast.add_node(add_node, self.create_node_info_at(start_token_index));
+            expr = self.ast.add_node(add_node, NodeInfo::new(start_token_index));
         }
         
         Ok(expr)
@@ -495,28 +539,28 @@ impl Parser {
                 self.advance();
                 let expr = self.parse_primary()?;
                 // For simplicity, just create 0 - expr
-                let zero = self.ast.add_node(Node::ConstI32(0), self.create_node_info_at(start_token_index));
+                let zero = self.ast.add_node(Node::ConstI32(0), NodeInfo::new(start_token_index));
                 let neg_node = Node::BinopAdd(zero, expr); // This should be subtract, but we only have add
-                Ok(self.ast.add_node(neg_node, self.create_node_info_at(start_token_index)))
+                Ok(self.ast.add_node(neg_node, NodeInfo::new(start_token_index)))
             }
             TokenType::IntLiteral => {
                 let token_text = self.get_token_text(&token);
                 let value = token_text.parse::<i32>().unwrap_or(0);
                 self.advance();
                 let const_node = Node::ConstI32(value);
-                Ok(self.ast.add_node(const_node, self.create_node_info_at(start_token_index)))
+                Ok(self.ast.add_node(const_node, NodeInfo::new(start_token_index)))
             }
             
             TokenType::True => {
                 self.advance();
                 let const_node = Node::ConstBool(true);
-                Ok(self.ast.add_node(const_node, self.create_node_info_at(start_token_index)))
+                Ok(self.ast.add_node(const_node, NodeInfo::new(start_token_index)))
             }
             
             TokenType::False => {
                 self.advance();
                 let const_node = Node::ConstBool(false);
-                Ok(self.ast.add_node(const_node, self.create_node_info_at(start_token_index)))
+                Ok(self.ast.add_node(const_node, NodeInfo::new(start_token_index)))
             }
             
             TokenType::StringLiteral => {
@@ -526,7 +570,7 @@ impl Parser {
                 self.advance();
                 let string_ref = self.ast.add_string(value);
                 let const_node = Node::ConstString(string_ref);
-                Ok(self.ast.add_node(const_node, self.create_node_info_at(start_token_index)))
+                Ok(self.ast.add_node(const_node, NodeInfo::new(start_token_index)))
             }
             
             TokenType::Identifier => {
@@ -539,7 +583,7 @@ impl Parser {
                 if let Some(local_index) = self.lookup_local(name_ref) {
                     // Found binding - create LocalRead
                     let local_read = Node::LocalRead(local_index);
-                    Ok(self.ast.add_node(local_read, self.create_node_info_at(start_token_index)))
+                    Ok(self.ast.add_node(local_read, NodeInfo::new(start_token_index)))
                 } else {
                     // Identifier not found in current scope
                     return Err(ParseError::new(
@@ -550,10 +594,20 @@ impl Parser {
             }
             
             TokenType::LeftParen => {
-                self.advance();
-                let expr = self.parse_expression()?;
-                self.expect(TokenType::RightParen)?;
-                Ok(expr)
+                self.advance(); // consume '('
+                
+                // Check if this is unit value () or parenthesized expression
+                if self.current_token.token_type == TokenType::RightParen {
+                    // Unit value ()
+                    self.advance(); // consume ')'
+                    let unit_node = Node::ConstUnit;
+                    Ok(self.ast.add_node(unit_node, NodeInfo::new(start_token_index)))
+                } else {
+                    // Parenthesized expression
+                    let expr = self.parse_expression()?;
+                    self.expect(TokenType::RightParen)?;
+                    Ok(expr)
+                }
             }
             
             _ => Err(ParseError::new(
@@ -604,11 +658,6 @@ impl Parser {
             let end = start + token.length as usize;
             &self.source[start..end]
         }
-    }
-    
-    /// Create NodeInfo for a specific token index
-    fn create_node_info_at(&self, token_index: usize) -> NodeInfo {
-        NodeInfo::new(token_index)
     }
 
     // Scope management methods
@@ -701,6 +750,14 @@ mod tests {
         let printer = PrettyPrinter::new(&ast);
         let output = printer.print();
         assert_eq!(input, output);
+    }
+    
+    fn parse_prints_as(input: &str, expected_output: &str) {
+        // Test cases where input parses correctly but prints in normalized form
+        let ast = Parser::parse(input).unwrap();
+        let printer = PrettyPrinter::new(&ast);
+        let output = printer.print();
+        assert_eq!(expected_output, output);
     }
 
     #[test] 
@@ -838,5 +895,43 @@ mod tests {
         
         // Test multiple statements in control structures
         roundtrip("fn main() { let x = 1; if x == 1 { let y = 2; return y; } else { let z = 3; return z; } }");
+    }
+    
+    #[test]
+    fn test_unit_type_and_expression_blocks() {
+        // Test unit type in function signatures
+        roundtrip("fn main() { let x = 1; }");
+        
+        // Test block expressions (final expression without semicolon)
+        roundtrip("fn main() -> i32 { 42 }");
+        roundtrip("fn main() -> bool { let x = 1; x == 1 }");
+        
+        // Test nested block expressions
+        roundtrip("fn main() -> i32 { { let x = 1; x + 1 } }");
+        
+        // Test if expressions
+        roundtrip("fn main() -> i32 { if true { 1 } else { 2 } }");
+    }
+    
+    #[test]
+    fn test_unit_syntax() {
+        // Test implicit unit type (no arrow)
+        roundtrip("fn main() { let x = 1; }");
+        
+        // Test empty block stays empty
+        roundtrip("fn main() { }");
+        
+        // Test explicit unit values are normalized to empty blocks
+        parse_prints_as("fn main() { () }", "fn main() { }");
+        
+        // Test return with unit value
+        roundtrip("fn main() { return (); }");
+        
+        // Test that unit values work in expressions
+        roundtrip("fn main() -> i32 { let x = (); 42 }");
+        
+        // Test that final unit is always suppressed
+        parse_prints_as("fn main() { let x = 1; () }", "fn main() { let x = 1; }");
+        roundtrip("fn main() { let x = 1; }");    // Already normalized
     }
 }

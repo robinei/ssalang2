@@ -117,7 +117,7 @@ impl Flags {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum TypeAtom {
-    Void = 0,
+    Unit = 0,
     Bool = 1,
     I32 = 2,
 }
@@ -129,6 +129,7 @@ pub enum Node {
     TypeAtom(TypeAtom), // atom
     
     // Constant nodes  
+    ConstUnit, // unit value ()
     ConstBool(bool), // value
     ConstI32(i32), // value
     ConstString(StringRef), // string_ref

@@ -23,7 +23,6 @@ pub enum TokenType {
     // Types
     Bool,
     I32,
-    Void,
     
     // Operators
     Plus,      // +
@@ -220,10 +219,6 @@ impl<'a> Lexer<'a> {
                 "true" => TokenType::True,
                 _ => TokenType::Identifier,
             },
-            'v' => match ident {
-                "void" => TokenType::Void,
-                _ => TokenType::Identifier,
-            },
             'w' => match ident {
                 "while" => TokenType::While,
                 _ => TokenType::Identifier,
@@ -418,7 +413,7 @@ mod tests {
     
     #[test]
     fn test_function_syntax() {
-        let mut lexer = Lexer::new("fn main() -> void { }");
+        let mut lexer = Lexer::new("fn main() -> () { }");
         let tokens = lexer.tokenize();
         
         let expected = vec![
@@ -427,7 +422,8 @@ mod tests {
             TokenType::LeftParen,
             TokenType::RightParen,
             TokenType::Arrow,
-            TokenType::Void,
+            TokenType::LeftParen,
+            TokenType::RightParen,
             TokenType::LeftBrace,
             TokenType::RightBrace,
             TokenType::Eof,

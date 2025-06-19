@@ -25,6 +25,7 @@ impl<'a> PrettyPrinter<'a> {
         let node = self.ast.get_node(node_ref);
         match node {
             Node::TypeAtom(atom) => self.write_type_atom(*atom),
+            Node::ConstUnit => self.buffer.push_str("()"),
             Node::ConstBool(value) => self.buffer.push_str(&value.to_string()),
             Node::ConstI32(value) => self.buffer.push_str(&value.to_string()),
             Node::ConstString(string_ref) => {
@@ -76,17 +77,31 @@ impl<'a> PrettyPrinter<'a> {
                     self.buffer.push_str("inline ");
                 }
                 
-                self.buffer.push_str("{ ");
-                
                 let statements = self.ast.get_statements(*statements_ref);
+                let mut printed_statements = Vec::new();
+                
                 for (i, &statement) in statements.iter().enumerate() {
-                    if i > 0 {
-                        self.buffer.push(' ');
+                    // Always skip printing final ConstUnit (whether auto-generated or user-written)
+                    let is_last = i == statements.len() - 1;
+                    let is_final_unit = is_last && self.is_unit_value(statement);
+                    
+                    if !is_final_unit {
+                        printed_statements.push(statement);
                     }
-                    self.print_node(statement, 0);
                 }
                 
-                self.buffer.push_str(" }");
+                if printed_statements.is_empty() {
+                    self.buffer.push_str("{ }");
+                } else {
+                    self.buffer.push_str("{ ");
+                    for (i, &statement) in printed_statements.iter().enumerate() {
+                        if i > 0 {
+                            self.buffer.push(' ');
+                        }
+                        self.print_node(statement, 0);
+                    }
+                    self.buffer.push_str(" }");
+                }
             }
             Node::If(flags, _scope_index, cond, then_branch, else_branch) => {
                 if flags.is_static() {
@@ -130,7 +145,7 @@ impl<'a> PrettyPrinter<'a> {
                 self.print_node(*body, 0);
             }
             Node::Break(_flags, _scope_index, value) => {
-                if self.is_void_value(*value) {
+                if self.is_unit_value(*value) {
                     self.buffer.push_str("break;");
                 } else {
                     self.buffer.push_str("break ");
@@ -139,7 +154,7 @@ impl<'a> PrettyPrinter<'a> {
                 }
             }
             Node::Continue(_flags, _scope_index, value) => {
-                if self.is_void_value(*value) {
+                if self.is_unit_value(*value) {
                     self.buffer.push_str("continue;");
                 } else {
                     self.buffer.push_str("continue ");
@@ -180,8 +195,8 @@ impl<'a> PrettyPrinter<'a> {
                 
                 self.buffer.push_str(")");
                 
-                // Print return type if not void
-                if !matches!(self.ast.get_node(*return_type), Node::TypeAtom(TypeAtom::Void)) {
+                // Print return type if not unit
+                if !matches!(self.ast.get_node(*return_type), Node::TypeAtom(TypeAtom::Unit)) {
                     self.buffer.push_str(" -> ");
                     self.print_node(*return_type, 0);
                 }
@@ -200,7 +215,7 @@ impl<'a> PrettyPrinter<'a> {
 
     fn write_type_atom(&mut self, atom: TypeAtom) {
         match atom {
-            TypeAtom::Void => self.buffer.push_str("void"),
+            TypeAtom::Unit => self.buffer.push_str("()"),
             TypeAtom::Bool => self.buffer.push_str("bool"),
             TypeAtom::I32 => self.buffer.push_str("i32"),
         }
@@ -253,9 +268,9 @@ impl<'a> PrettyPrinter<'a> {
         }
     }
 
-    fn is_void_value(&self, node_ref: NodeRef) -> bool {
-        // Check if this represents a void value (like empty break/continue)
-        matches!(self.ast.get_node(node_ref), Node::TypeAtom(TypeAtom::Void))
+    fn is_unit_value(&self, node_ref: NodeRef) -> bool {
+        // Check if this represents a unit value (like empty break/continue)
+        matches!(self.ast.get_node(node_ref), Node::ConstUnit)
     }
 }
 
