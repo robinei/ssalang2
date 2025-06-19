@@ -55,7 +55,10 @@ impl LocalsRef {
     }
 
     pub fn empty() -> Self {
-        Self { offset: 0, count: 0 }
+        Self {
+            offset: 0,
+            count: 0,
+        }
     }
 }
 
@@ -71,7 +74,10 @@ impl StatementsRef {
     }
 
     pub fn empty() -> Self {
-        Self { offset: 0, count: 0 }
+        Self {
+            offset: 0,
+            count: 0,
+        }
     }
 }
 
@@ -80,8 +86,8 @@ impl StatementsRef {
 pub struct Flags(u8);
 
 impl Flags {
-    const IS_STATIC: u8 = 0x01;      // Block, If, While, Break, Continue, Func: is_static
-    const IS_INLINE: u8 = 0x02;      // If, While, Func: is_inline
+    const IS_STATIC: u8 = 0x01; // Block, If, While, Break, Continue, Func: is_static
+    const IS_INLINE: u8 = 0x02; // If, While, Func: is_inline
 
     pub fn new() -> Self {
         Self(0)
@@ -110,7 +116,6 @@ impl Flags {
             self.0 &= !Self::IS_INLINE;
         }
     }
-
 }
 
 // Separate enum for type atoms
@@ -127,16 +132,16 @@ pub enum TypeAtom {
 pub enum Node {
     // Type nodes
     TypeAtom(TypeAtom), // atom
-    
-    // Constant nodes  
-    ConstUnit, // unit value ()
-    ConstBool(bool), // value
-    ConstI32(i32), // value
+
+    // Constant nodes
+    ConstUnit,              // unit value ()
+    ConstBool(bool),        // value
+    ConstI32(i32),          // value
     ConstString(StringRef), // string_ref
 
     // Unary operation nodes
     UnopNeg(NodeRef), // operand
-    
+
     // Binary operation nodes
     BinopAdd(NodeRef, NodeRef), // left, right
     BinopSub(NodeRef, NodeRef), // left, right
@@ -144,21 +149,21 @@ pub enum Node {
     BinopDiv(NodeRef, NodeRef), // left, right
     BinopEq(NodeRef, NodeRef),  // left, right
     BinopNeq(NodeRef, NodeRef), // left, right
-    
+
     // Local variable nodes
     LocalWrite(bool, LocalIndex, NodeRef), // is_definition, local_index, expr
-    LocalRead(LocalIndex), // local_index
-    
+    LocalRead(LocalIndex),                 // local_index
+
     // Control flow nodes
     Block(Flags, ScopeIndex, StatementsRef), // flags, scope_index, statements
-    If(Flags, NodeRef, NodeRef, NodeRef), // flags, cond, then, els
-    While(Flags, NodeRef, NodeRef), // flags, cond, body
-    
+    If(Flags, NodeRef, NodeRef, NodeRef),    // flags, cond, then, els
+    While(Flags, NodeRef, NodeRef),          // flags, cond, body
+
     // Jump nodes
     Break(Flags, ScopeIndex, NodeRef), // flags, scope_index, value
     Continue(Flags, ScopeIndex, NodeRef), // flags, scope_index, value
-    Return(NodeRef), // value_node
-    
+    Return(NodeRef),                   // value_node
+
     // Function node
     Func(Flags, LocalsRef, NodeRef, NodeRef), // flags, locals_ref, body, return_type
 }
@@ -166,7 +171,7 @@ pub enum Node {
 // Per-node metadata stored alongside AST nodes
 #[derive(Debug, Clone)]
 pub struct NodeInfo {
-    pub first_token: usize,  // Index into token stream where this node starts
+    pub first_token: usize, // Index into token stream where this node starts
 }
 
 impl NodeInfo {
@@ -185,10 +190,9 @@ pub struct Local {
     pub ty: NodeRef,
 }
 
-
 // AST that owns all associated data including the tree structure itself
 pub struct Ast {
-    nodes: Vec<Node>,         // All AST nodes
+    nodes: Vec<Node>,                                         // All AST nodes
     node_info: Vec<NodeInfo>, // Per-node metadata (source location, etc.)
     locals: Vec<Local>,       // Flat array of all locals across all functions
     statements: Vec<NodeRef>, // Flat array of all statements in blocks
@@ -243,6 +247,12 @@ impl Ast {
     }
 
     // Local storage methods
+    pub fn add_local(&mut self, local: Local) -> LocalIndex {
+        let index = self.locals.len() as LocalIndex;
+        self.locals.push(local);
+        index
+    }
+
     pub fn add_locals(&mut self, locals: &[Local]) -> LocalsRef {
         let offset = self.locals.len() as u16;
         let count = locals.len() as u16;
@@ -259,7 +269,7 @@ impl Ast {
     pub fn get_local(&self, index: LocalIndex) -> &Local {
         &self.locals[index as usize]
     }
-    
+
     pub fn get_local_name(&self, index: LocalIndex) -> &str {
         let local = self.get_local(index);
         self.get_symbol(local.name)
@@ -341,21 +351,21 @@ mod tests {
     #[test]
     fn test_symbol_interning() {
         let mut ast = Ast::new();
-        
+
         // Add the same symbol multiple times
         let sym1 = ast.intern_symbol("test".to_string());
         let sym2 = ast.intern_symbol("test".to_string());
         let sym3 = ast.intern_symbol("different".to_string());
         let sym4 = ast.intern_symbol("test".to_string());
-        
+
         // Should only have 2 unique symbols stored
         assert_eq!(ast.symbol_count(), 2);
-        
+
         // Same symbol name should return same reference
         assert_eq!(sym1, sym2);
         assert_eq!(sym1, sym4);
         assert_ne!(sym1, sym3);
-        
+
         // Verify we can get back the correct strings
         assert_eq!(ast.get_symbol(sym1), "test");
         assert_eq!(ast.get_symbol(sym3), "different");
