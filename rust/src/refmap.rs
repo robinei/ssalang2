@@ -7,8 +7,8 @@ pub struct RefMap<R, T> {
     _phantom: std::marker::PhantomData<R>,
 }
 
-impl<R, T> RefMap<R, T> 
-where 
+impl<R, T> RefMap<R, T>
+where
     R: Copy + From<crate::ir::RefType> + Into<crate::ir::RefType>,
     T: Default,
 {
@@ -45,7 +45,9 @@ where
     pub fn get(&self, r: R) -> &T {
         let index = r.into() as usize;
         assert!(index > 0, "Cannot access reserved index 0");
-        self.data.get(index).unwrap_or_else(|| panic!("RefMap entry at index {} does not exist", index))
+        self.data
+            .get(index)
+            .unwrap_or_else(|| panic!("RefMap entry at index {} does not exist", index))
     }
 
     /// Gets a mutable reference to an element by its ref, creating default elements as needed.
@@ -53,12 +55,12 @@ where
     pub fn get_mut(&mut self, r: R) -> &mut T {
         let index = r.into() as usize;
         assert!(index > 0, "Cannot access reserved index 0");
-        
+
         // Extend with default values if necessary
         while self.data.len() <= index {
             self.data.push(T::default());
         }
-        
+
         &mut self.data[index]
     }
 
@@ -108,18 +110,18 @@ mod tests {
     #[test]
     fn test_refmap_basic_operations() {
         let mut map: RefMap<BlockRef, TestItem> = RefMap::new();
-        
+
         // Should start empty (index 0 doesn't count)
         assert!(map.is_empty());
         assert_eq!(map.len(), 0);
-        
+
         // Push some items
         let ref1 = map.push(TestItem::new(42));
         let ref2 = map.push(TestItem::new(24));
-        
+
         assert_eq!(map.len(), 2);
         assert!(!map.is_empty());
-        
+
         // Should be able to get the items
         assert_eq!(map.get(ref1).value, 42);
         assert_eq!(map.get(ref2).value, 24);
@@ -128,17 +130,17 @@ mod tests {
     #[test]
     fn test_refmap_get_mut_creates() {
         let mut map: RefMap<VarRef, TestItem> = RefMap::new();
-        
+
         // Create a reference that doesn't exist yet
         let var_ref = VarRef::new(5).unwrap();
-        
+
         // get_mut should create all missing elements up to index 5
         let item = map.get_mut(var_ref);
         item.value = 100;
-        
+
         assert_eq!(map.len(), 5); // Should have created 5 elements
         assert_eq!(map.get(var_ref).value, 100);
-        
+
         // Earlier indices should exist with default values
         let var_ref1 = VarRef::new(1).unwrap();
         assert_eq!(map.get(var_ref1).value, 0); // Default value
@@ -147,15 +149,15 @@ mod tests {
     #[test]
     fn test_refmap_clear() {
         let mut map: RefMap<BlockRef, TestItem> = RefMap::new();
-        
+
         map.push(TestItem::new(1));
         map.push(TestItem::new(2));
         assert_eq!(map.len(), 2);
-        
+
         map.clear();
         assert_eq!(map.len(), 0);
         assert!(map.is_empty());
-        
+
         // Should be able to add new items after clear
         let ref1 = map.push(TestItem::new(42));
         assert_eq!(map.get(ref1).value, 42);

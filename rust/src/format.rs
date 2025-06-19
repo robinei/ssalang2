@@ -9,7 +9,7 @@ pub struct CodeFormatter<'a> {
 
 impl<'a> CodeFormatter<'a> {
     pub fn new(ast: &'a Ast) -> Self {
-        Self { 
+        Self {
             ast,
             buffer: String::with_capacity(1024), // Pre-allocate reasonable capacity
             current_token_index: 0,
@@ -20,10 +20,10 @@ impl<'a> CodeFormatter<'a> {
         let tokens = self.ast.get_tokens();
         let mut current_indent = 0;
         let mut at_line_start = true;
-        
+
         while self.current_token_index < tokens.len() {
             let token = &tokens[self.current_token_index];
-            
+
             match token.token_type {
                 TokenType::LeftBrace => {
                     if !self.buffer.ends_with(' ') && !self.buffer.is_empty() {
@@ -60,38 +60,40 @@ impl<'a> CodeFormatter<'a> {
                     at_line_start = false;
                 }
                 _ => {
-                    if at_line_start && !matches!(token.token_type, TokenType::Comment | TokenType::Newline) {
+                    if at_line_start
+                        && !matches!(token.token_type, TokenType::Comment | TokenType::Newline)
+                    {
                         self.emit_indent(current_indent);
                     }
                     self.emit_current_token(current_indent);
                     at_line_start = false;
                 }
             }
-            
+
             self.current_token_index += 1;
         }
         self.buffer
     }
-    
+
     /// Emit the current token at current_token_index position
     fn emit_current_token(&mut self, _indent: usize) {
         let tokens = self.ast.get_tokens();
         if self.current_token_index >= tokens.len() {
             return;
         }
-        
+
         let token = &tokens[self.current_token_index];
-        
+
         match token.token_type {
             TokenType::Comment => {
                 let comment_text = self.get_token_text(token).to_string();
                 self.buffer.push_str(&comment_text);
             }
-            
+
             TokenType::Newline => {
                 self.buffer.push('\n');
             }
-            
+
             // Handle semantic tokens that should be emitted as-is
             TokenType::Plus | TokenType::Minus | TokenType::Star | TokenType::Slash => {
                 if !self.buffer.ends_with(' ') && !self.buffer.is_empty() {
@@ -101,7 +103,7 @@ impl<'a> CodeFormatter<'a> {
                 self.buffer.push_str(&token_text);
                 self.buffer.push(' ');
             }
-            
+
             TokenType::Equal => {
                 if !self.buffer.ends_with(' ') && !self.buffer.is_empty() {
                     self.buffer.push(' ');
@@ -109,7 +111,7 @@ impl<'a> CodeFormatter<'a> {
                 self.buffer.push_str("==");
                 self.buffer.push(' ');
             }
-            
+
             TokenType::NotEqual => {
                 if !self.buffer.ends_with(' ') && !self.buffer.is_empty() {
                     self.buffer.push(' ');
@@ -117,16 +119,24 @@ impl<'a> CodeFormatter<'a> {
                 self.buffer.push_str("!=");
                 self.buffer.push(' ');
             }
-            
+
             // Handle keywords (need space after most keywords)
-            TokenType::Fn | TokenType::Let | TokenType::Const | TokenType::If | TokenType::Else | 
-            TokenType::While | TokenType::Break | TokenType::Continue | TokenType::Return |
-            TokenType::Static | TokenType::Inline => {
+            TokenType::Fn
+            | TokenType::Let
+            | TokenType::Const
+            | TokenType::If
+            | TokenType::Else
+            | TokenType::While
+            | TokenType::Break
+            | TokenType::Continue
+            | TokenType::Return
+            | TokenType::Static
+            | TokenType::Inline => {
                 let token_text = self.get_token_text(token).to_string();
                 self.buffer.push_str(&token_text);
                 self.buffer.push(' ');
             }
-            
+
             // Handle punctuation that needs space after
             TokenType::Arrow => {
                 let token_text = self.get_token_text(token).to_string();
@@ -136,40 +146,49 @@ impl<'a> CodeFormatter<'a> {
                 self.buffer.push_str(&token_text);
                 self.buffer.push(' ');
             }
-            
+
             TokenType::Comma => {
                 let token_text = self.get_token_text(token).to_string();
                 self.buffer.push_str(&token_text);
                 self.buffer.push(' ');
             }
-            
+
             // Handle punctuation that needs space before
             TokenType::Colon => {
                 let token_text = self.get_token_text(token).to_string();
                 self.buffer.push_str(&token_text);
                 self.buffer.push(' ');
             }
-            
+
             // Handle punctuation with no extra spacing
-            TokenType::LeftParen | TokenType::RightParen | TokenType::LeftBrace | TokenType::RightBrace |
-            TokenType::Semicolon | TokenType::Assign => {
+            TokenType::LeftParen
+            | TokenType::RightParen
+            | TokenType::LeftBrace
+            | TokenType::RightBrace
+            | TokenType::Semicolon
+            | TokenType::Assign => {
                 let token_text = self.get_token_text(token).to_string();
                 self.buffer.push_str(&token_text);
             }
-            
+
             // Handle literal and type tokens
-            TokenType::IntLiteral | TokenType::True | TokenType::False | TokenType::StringLiteral | TokenType::Identifier |
-            TokenType::Bool | TokenType::I32 => {
+            TokenType::IntLiteral
+            | TokenType::True
+            | TokenType::False
+            | TokenType::StringLiteral
+            | TokenType::Identifier
+            | TokenType::Bool
+            | TokenType::I32 => {
                 let token_text = self.get_token_text(token).to_string();
                 self.buffer.push_str(&token_text);
             }
-            
+
             _ => {
                 // Skip other tokens
             }
         }
     }
-    
+
     /// Get the text for a token from the original source
     fn get_token_text(&self, token: &Token) -> &str {
         if token.length == 0 {
@@ -189,7 +208,6 @@ impl<'a> CodeFormatter<'a> {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use crate::parse::Parser;
@@ -206,33 +224,39 @@ mod tests {
 
     #[test]
     fn test_comment_formatting() {
-        roundtrip(r#"// This is a comment
+        roundtrip(
+            r#"// This is a comment
 fn main() {
     // Another comment
     return 42; // Inline comment
-}"#);
+}"#,
+        );
     }
 
     #[test]
     fn test_comprehensive_formatting_roundtrip() {
-        roundtrip(r#"// File header comment
+        roundtrip(
+            r#"// File header comment
 // Another header line
 
 // Function documentation
 fn main(x: i32, y: bool) -> i32 {
     // Simple return with comment
     return 42; // Inline comment
-} // End of function"#);
+} // End of function"#,
+        );
     }
 
     #[test]
     fn test_edge_case_formatting_tokens() {
         // Test various edge cases for formatting token placement
-        roundtrip(r#"// Leading comment
+        roundtrip(
+            r#"// Leading comment
 
 fn main() -> bool {
     return true;
 }
-// Trailing comment"#);
+// Trailing comment"#,
+        );
     }
 }

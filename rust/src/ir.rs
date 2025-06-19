@@ -122,7 +122,7 @@ impl Meta {
     pub fn new(ty: Type) -> Self {
         Self(ty as u8)
     }
-    
+
     pub fn get_type(self) -> Type {
         match self.0 & 0x7F {
             0 => Type::Void,
@@ -131,11 +131,11 @@ impl Meta {
             _ => unreachable!(),
         }
     }
-    
+
     pub fn is_marked(self) -> bool {
         (self.0 & 0x80) != 0
     }
-    
+
     pub fn set_marked(&mut self, marked: bool) {
         if marked {
             self.0 |= 0x80;
@@ -183,15 +183,16 @@ impl Instr {
     pub fn const_i32(value: i32) -> Self {
         Self::ConstI32(Meta::new(Type::I32), value)
     }
-    
+
     pub fn is_pure(&self) -> bool {
-        matches!(self,
-            Self::ConstBool(..) | 
-            Self::ConstI32(..) | 
-            Self::Arg(..) | 
-            Self::Add(..) | 
-            Self::Eq(..) | 
-            Self::Neq(..)
+        matches!(
+            self,
+            Self::ConstBool(..)
+                | Self::ConstI32(..)
+                | Self::Arg(..)
+                | Self::Add(..)
+                | Self::Eq(..)
+                | Self::Neq(..)
         )
     }
 
@@ -252,12 +253,12 @@ mod tests {
         let meta1 = Meta::new(Type::I32);
         assert_eq!(meta1.get_type(), Type::I32);
         assert!(!meta1.is_marked());
-        
+
         let mut meta2 = Meta::new(Type::Bool);
         meta2.set_marked(true);
         assert_eq!(meta2.get_type(), Type::Bool);
         assert!(meta2.is_marked());
-        
+
         let mut meta3 = Meta::new(Type::Void);
         assert!(!meta3.is_marked());
         meta3.set_marked(true);
@@ -268,22 +269,16 @@ mod tests {
 
     #[test]
     fn test_bool_const() {
-        let instr_true = Instr::ConstBool(
-            Meta::new(Type::Bool),
-            true,
-        );
-        
-        let instr_false = Instr::ConstBool(
-            Meta::new(Type::Bool),
-            false,
-        );
-        
+        let instr_true = Instr::ConstBool(Meta::new(Type::Bool), true);
+
+        let instr_false = Instr::ConstBool(Meta::new(Type::Bool), false);
+
         if let Instr::ConstBool(_, value) = instr_true {
             assert_eq!(value, true);
         } else {
             panic!("Expected ConstBool variant");
         }
-        
+
         if let Instr::ConstBool(_, value) = instr_false {
             assert_eq!(value, false);
         } else {
@@ -293,22 +288,16 @@ mod tests {
 
     #[test]
     fn test_i32_const() {
-        let instr = Instr::ConstI32(
-            Meta::new(Type::I32),
-            0x12345678,
-        );
-        
+        let instr = Instr::ConstI32(Meta::new(Type::I32), 0x12345678);
+
         if let Instr::ConstI32(_, value) = instr {
             assert_eq!(value, 0x12345678);
         } else {
             panic!("Expected ConstI32 variant");
         }
-        
-        let instr_neg = Instr::ConstI32(
-            Meta::new(Type::I32),
-            -1,
-        );
-        
+
+        let instr_neg = Instr::ConstI32(Meta::new(Type::I32), -1);
+
         if let Instr::ConstI32(_, value) = instr_neg {
             assert_eq!(value, -1);
         } else {
@@ -321,33 +310,30 @@ mod tests {
         let mut meta = Meta::new(Type::Void);
         meta.set_marked(true);
         let nop = Instr::Nop(meta);
-        
+
         assert_eq!(nop.get_type(), Type::Void);
         assert!(nop.is_marked());
         assert!(!nop.is_pure());
         assert!(!nop.is_terminal());
-        
+
         // Test get_meta method
         let meta = nop.get_meta();
         assert_eq!(meta.get_type(), Type::Void);
         assert!(meta.is_marked());
-        
+
         let add = Instr::Add(
             Meta::new(Type::I32),
             InstrRef::new(1).unwrap(),
             InstrRef::new(2).unwrap(),
         );
-        
+
         assert!(add.is_pure());
         assert!(!add.is_terminal());
         assert!(!add.is_marked());
         assert_eq!(add.get_meta().get_type(), Type::I32);
-        
-        let jump = Instr::Jump(
-            Meta::new(Type::Void),
-            BlockRef::new(5).unwrap(),
-        );
-        
+
+        let jump = Instr::Jump(Meta::new(Type::Void), BlockRef::new(5).unwrap());
+
         assert!(!jump.is_pure());
         assert!(jump.is_terminal());
     }
@@ -355,11 +341,23 @@ mod tests {
     #[test]
     fn test_niche_optimization() {
         // Test that Option<Ref> has the same size as Ref due to niche optimization
-        assert_eq!(std::mem::size_of::<InstrRef>(), std::mem::size_of::<Option<InstrRef>>());
-        assert_eq!(std::mem::size_of::<BlockRef>(), std::mem::size_of::<Option<BlockRef>>());
-        assert_eq!(std::mem::size_of::<PhiRef>(), std::mem::size_of::<Option<PhiRef>>());
-        assert_eq!(std::mem::size_of::<VarRef>(), std::mem::size_of::<Option<VarRef>>());
-        
+        assert_eq!(
+            std::mem::size_of::<InstrRef>(),
+            std::mem::size_of::<Option<InstrRef>>()
+        );
+        assert_eq!(
+            std::mem::size_of::<BlockRef>(),
+            std::mem::size_of::<Option<BlockRef>>()
+        );
+        assert_eq!(
+            std::mem::size_of::<PhiRef>(),
+            std::mem::size_of::<Option<PhiRef>>()
+        );
+        assert_eq!(
+            std::mem::size_of::<VarRef>(),
+            std::mem::size_of::<Option<VarRef>>()
+        );
+
         // All should be exactly 16 bits (2 bytes)
         assert_eq!(std::mem::size_of::<InstrRef>(), 2);
         assert_eq!(std::mem::size_of::<Option<InstrRef>>(), 2);
@@ -376,15 +374,15 @@ mod tests {
         let instr_ref = InstrRef::new(42).unwrap();
         assert_eq!(RefType::from(instr_ref), 42);
         assert_eq!(instr_ref.get(), 42);
-        
+
         let block_ref = BlockRef::new(-1).unwrap();
         assert_eq!(RefType::from(block_ref), -1);
         assert_eq!(block_ref.get(), -1);
-        
+
         let phi_ref = PhiRef::new(100).unwrap();
         assert_eq!(RefType::from(phi_ref), 100);
         assert_eq!(phi_ref.get(), 100);
-        
+
         // Test equality and hashing work
         assert_eq!(InstrRef::new(42).unwrap(), InstrRef::new(42).unwrap());
         assert_ne!(InstrRef::new(42).unwrap(), InstrRef::new(43).unwrap());
@@ -396,11 +394,11 @@ mod tests {
         assert_eq!(nop.get_type(), Type::Void);
         assert!(!nop.is_pure());
         assert!(!nop.is_terminal());
-        
+
         // Test that Default trait uses nop constructor
         let default_instr = Instr::default();
         assert_eq!(default_instr.get_type(), Type::Void);
-        
+
         // Verify they're the same
         assert_eq!(nop, default_instr);
     }

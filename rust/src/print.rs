@@ -7,7 +7,7 @@ pub struct PrettyPrinter<'a> {
 
 impl<'a> PrettyPrinter<'a> {
     pub fn new(ast: &'a Ast) -> Self {
-        Self { 
+        Self {
             ast,
             buffer: String::with_capacity(1024), // Pre-allocate reasonable capacity
         }
@@ -103,20 +103,20 @@ impl<'a> PrettyPrinter<'a> {
                 if flags.is_inline() {
                     self.buffer.push_str("inline ");
                 }
-                
+
                 let statements = self.ast.get_statements(*statements_ref);
                 let mut printed_statements = Vec::new();
-                
+
                 for (i, &statement) in statements.iter().enumerate() {
                     // Always skip printing final ConstUnit (whether auto-generated or user-written)
                     let is_last = i == statements.len() - 1;
                     let is_final_unit = is_last && self.is_unit_value(statement);
-                    
+
                     if !is_final_unit {
                         printed_statements.push(statement);
                     }
                 }
-                
+
                 if printed_statements.is_empty() {
                     self.buffer.push_str("{ }");
                 } else {
@@ -137,14 +137,14 @@ impl<'a> PrettyPrinter<'a> {
                 if flags.is_inline() {
                     self.buffer.push_str("inline ");
                 }
-                
+
                 self.buffer.push_str("if ");
                 self.print_expression(*cond);
                 self.buffer.push(' ');
-                
+
                 // Handle then branch (always a Block)
                 self.print_node(*then_branch, 0);
-                
+
                 // Handle else branch (Block or If node, but might be empty)
                 if self.is_block_node(*else_branch) {
                     if !self.is_empty_or_unit_only_block(*else_branch) {
@@ -163,11 +163,11 @@ impl<'a> PrettyPrinter<'a> {
                 if flags.is_inline() {
                     self.buffer.push_str("inline ");
                 }
-                
+
                 self.buffer.push_str("while ");
                 self.print_expression(*cond);
                 self.buffer.push(' ');
-                
+
                 // Handle body (always a Block)
                 self.print_node(*body, 0);
             }
@@ -201,15 +201,17 @@ impl<'a> PrettyPrinter<'a> {
                 if flags.is_inline() {
                     self.buffer.push_str("inline ");
                 }
-                
+
                 self.buffer.push_str("fn main(");
-                
+
                 // Print parameters
                 let locals = self.ast.get_locals(*locals_ref);
-                let params: Vec<_> = locals.iter().enumerate()
+                let params: Vec<_> = locals
+                    .iter()
+                    .enumerate()
                     .filter(|(_, local)| local.is_param)
                     .collect();
-                
+
                 for (i, (_local_idx, local)) in params.iter().enumerate() {
                     if i > 0 {
                         self.buffer.push_str(", ");
@@ -222,17 +224,20 @@ impl<'a> PrettyPrinter<'a> {
                     self.buffer.push_str(": ");
                     self.print_node(local.ty, 0);
                 }
-                
+
                 self.buffer.push_str(")");
-                
+
                 // Print return type if not unit
-                if !matches!(self.ast.get_node(*return_type), Node::TypeAtom(TypeAtom::Unit)) {
+                if !matches!(
+                    self.ast.get_node(*return_type),
+                    Node::TypeAtom(TypeAtom::Unit)
+                ) {
                     self.buffer.push_str(" -> ");
                     self.print_node(*return_type, 0);
                 }
-                
+
                 self.buffer.push(' ');
-                
+
                 // Print function body (always a Block)
                 self.print_node(*body, 0);
             }
@@ -242,18 +247,18 @@ impl<'a> PrettyPrinter<'a> {
     fn print_expression(&mut self, node_ref: NodeRef) {
         self.print_expression_with_precedence(node_ref, 0)
     }
-    
+
     fn print_expression_with_precedence(&mut self, node_ref: NodeRef, parent_precedence: i32) {
         let node = self.ast.get_node(node_ref);
         let current_precedence = self.get_node_precedence(node);
-        
+
         // Add parentheses if current precedence is lower than parent precedence
         let needs_parens = current_precedence > 0 && current_precedence < parent_precedence;
-        
+
         if needs_parens {
             self.buffer.push('(');
         }
-        
+
         match node {
             Node::BinopAdd(left, right) => {
                 self.print_expression_with_precedence(*left, current_precedence);
@@ -294,15 +299,15 @@ impl<'a> PrettyPrinter<'a> {
                 self.print_node(node_ref, 0);
             }
         }
-        
+
         if needs_parens {
             self.buffer.push(')');
         }
     }
-    
+
     fn get_node_precedence(&self, node: &Node) -> i32 {
         match node {
-            Node::BinopEq(_, _) | Node::BinopNeq(_, _) => 1,  // Equality: lowest precedence
+            Node::BinopEq(_, _) | Node::BinopNeq(_, _) => 1, // Equality: lowest precedence
             Node::BinopAdd(_, _) | Node::BinopSub(_, _) => 2, // Addition/subtraction
             Node::BinopMul(_, _) | Node::BinopDiv(_, _) => 3, // Multiplication/division: highest precedence
             Node::UnopNeg(_) => 4,                            // Unary operators: highest precedence
@@ -375,4 +380,3 @@ impl<'a> PrettyPrinter<'a> {
         matches!(self.ast.get_node(node_ref), Node::ConstUnit)
     }
 }
-

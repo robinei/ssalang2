@@ -2,7 +2,7 @@ use crate::ir::{Instr, InstrRef, RefType};
 use std::ops::{Index, IndexMut};
 
 /// A specialized instruction storage that maintains SSA invariants.
-/// 
+///
 /// Key properties:
 /// - Index 0 always contains Nop instruction
 /// - Positive indices store pinned instructions (sequential execution order)
@@ -26,10 +26,10 @@ impl Code {
             positive: Vec::with_capacity(16),
             negative: Vec::with_capacity(16),
         };
-        
+
         // Ensure index 0 always contains Nop
         code.positive.push(Instr::nop());
-        
+
         code
     }
 
@@ -39,10 +39,10 @@ impl Code {
             positive: Vec::with_capacity(positive_cap),
             negative: Vec::with_capacity(negative_cap),
         };
-        
+
         // Ensure index 0 always contains Nop
         code.positive.push(Instr::nop());
-        
+
         code
     }
 
@@ -117,14 +117,20 @@ impl Code {
     pub fn set(&mut self, instr_ref: InstrRef, instr: Instr) {
         let index = instr_ref.get();
         assert_ne!(index, 0, "Cannot modify the Nop instruction at index 0");
-        
+
         if index > 0 {
             let pos_index = index as usize;
-            assert!(pos_index < self.positive.len(), "Invalid positive instruction reference");
+            assert!(
+                pos_index < self.positive.len(),
+                "Invalid positive instruction reference"
+            );
             self.positive[pos_index] = instr;
         } else {
             let neg_index = (-index - 1) as usize;
-            assert!(neg_index < self.negative.len(), "Invalid negative instruction reference");
+            assert!(
+                neg_index < self.negative.len(),
+                "Invalid negative instruction reference"
+            );
             self.negative[neg_index] = instr;
         }
     }
@@ -147,7 +153,8 @@ impl IndexMut<InstrRef> for Code {
     fn index_mut(&mut self, instr_ref: InstrRef) -> &mut Self::Output {
         let index = instr_ref.get();
         assert_ne!(index, 0, "Cannot modify the Nop instruction at index 0");
-        self.get_mut(instr_ref).expect("Invalid instruction reference")
+        self.get_mut(instr_ref)
+            .expect("Invalid instruction reference")
     }
 }
 
@@ -211,17 +218,17 @@ impl<'a> Iterator for CodeIterator<'a> {
         if self.current_index >= self.end_index {
             return None;
         }
-        
+
         let index = self.current_index;
-        
+
         // Skip index 0 since InstrRef can't represent it (NonZeroI16)
         if index == 0 {
             self.current_index += 1;
             return self.next();
         }
-        
+
         let instr_ref = InstrRef::new(index as RefType)?;
-        
+
         let instr = if index < 0 {
             // Negative index: convert to array index
             let array_index = (-index - 1) as usize;
@@ -230,7 +237,7 @@ impl<'a> Iterator for CodeIterator<'a> {
             // Positive index: direct array index
             &self.positive[index as usize]
         };
-        
+
         self.current_index += 1;
         Some((instr_ref, instr))
     }
@@ -243,9 +250,9 @@ mod tests {
     #[test]
     fn test_new_code_has_nop_at_zero() {
         let code = Code::new();
-        assert_eq!(code.pinned_count(), 0);  // No user instructions yet
+        assert_eq!(code.pinned_count(), 0); // No user instructions yet
         assert_eq!(code.unpinned_count(), 0);
-        
+
         match code[0] {
             Instr::Nop(_) => (),
             _ => panic!("Index 0 should contain Nop"),
@@ -257,10 +264,10 @@ mod tests {
         let mut code = Code::new();
         let instr = Instr::const_i32(42);
         let instr_ref = code.push_pinned(instr);
-        
+
         assert_eq!(instr_ref.get(), 1);
         assert_eq!(code[instr_ref], instr);
-        assert_eq!(code.pinned_count(), 1);  // One user instruction
+        assert_eq!(code.pinned_count(), 1); // One user instruction
     }
 
     #[test]
@@ -268,7 +275,7 @@ mod tests {
         let mut code = Code::new();
         let instr = Instr::const_bool(true);
         let instr_ref = code.push_unpinned(instr);
-        
+
         assert_eq!(instr_ref.get(), -1);
         assert_eq!(code[instr_ref], instr);
         assert_eq!(code.unpinned_count(), 1);
@@ -279,7 +286,7 @@ mod tests {
         let mut code = Code::new();
         let instr_ref = code.push_pinned(Instr::const_i32(10));
         let new_instr = Instr::const_i32(20);
-        
+
         code.set(instr_ref, new_instr);
         assert_eq!(code[instr_ref], new_instr);
     }
@@ -300,10 +307,10 @@ mod tests {
         let mut code = Code::new();
         code.push_pinned(Instr::const_i32(42));
         code.push_unpinned(Instr::const_bool(true));
-        
+
         code.clear();
-        
-        assert_eq!(code.pinned_count(), 0);  // No user instructions after clear
+
+        assert_eq!(code.pinned_count(), 0); // No user instructions after clear
         assert_eq!(code.unpinned_count(), 0);
         match code[0] {
             Instr::Nop(_) => (),
@@ -316,10 +323,10 @@ mod tests {
         let mut code = Code::new();
         let pos_ref = code.push_pinned(Instr::const_i32(10));
         let neg_ref = code.push_unpinned(Instr::const_bool(true));
-        
+
         let items: Vec<_> = code.iter_with_refs().collect();
         assert_eq!(items.len(), 2); // 1 positive + 1 negative (skip index 0)
-        
+
         // Should iterate in order: negative, then positive (skip index 0)
         assert_eq!(items[0].0, neg_ref);
         assert_eq!(items[1].0, pos_ref);
