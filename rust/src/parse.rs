@@ -54,29 +54,52 @@ impl Parser {
             scope_stack: Vec::new(),
         };
         
-        // Get first non-formatting token
-        parser.advance_to_next_semantic_token();
+        parser.update_current_token();
         
         parser
     }
     
-    fn advance_to_next_semantic_token(&mut self) {
+    fn update_current_token(&mut self) {
+        // Skip formatting tokens to find next semantic token
         while self.token_index < self.tokens.len() {
             self.current_token = self.tokens[self.token_index];
             if !matches!(self.current_token.token_type, TokenType::Comment | TokenType::Newline) {
-                break;
+                return; // accept semantic token
             }
             self.token_index += 1;
         }
         
-        if self.token_index >= self.tokens.len() {
-            self.current_token = Token::new(TokenType::Eof, 0, 0);
-        }
+        // Set EOF token if we've reached the end
+        self.current_token = Token::new(TokenType::Eof, 0, 0);
     }
     
     fn advance(&mut self) {
+        if self.token_index >= self.tokens.len() {
+            return;
+        }
+        
         self.token_index += 1;
-        self.advance_to_next_semantic_token();
+        self.update_current_token();
+    }
+    
+    fn peek(&self, n: usize) -> TokenType {
+        // Look ahead n semantic tokens from current position
+        let mut peek_index = self.token_index;
+        let mut semantic_count = 0;
+        
+        while peek_index < self.tokens.len() {
+            let token = &self.tokens[peek_index];
+            if !matches!(token.token_type, TokenType::Comment | TokenType::Newline) {
+                if semantic_count == n {
+                    return token.token_type;
+                }
+                semantic_count += 1;
+            }
+            peek_index += 1;
+        }
+        
+        // If we can't find the nth token, return EOF
+        TokenType::Eof
     }
     
     fn expect(&mut self, expected: TokenType) -> ParseResult<Token> {
@@ -183,6 +206,14 @@ impl Parser {
     
     // Parse a function parameter
     fn parse_parameter(&mut self) -> ParseResult<Local> {
+        // Check for static modifier
+        let is_static = if self.current_token.token_type == TokenType::Static {
+            self.advance();
+            true
+        } else {
+            false
+        };
+        
         let param_name = if let TokenType::Identifier = &self.current_token.token_type {
             let name_text = self.get_token_text(&self.current_token).to_string();
             self.advance();
@@ -199,7 +230,7 @@ impl Parser {
         Ok(Local {
             name: name_ref,
             is_param: true,
-            is_static: false,
+            is_static,
             is_const: false,
             ty: param_type,
         })
@@ -279,8 +310,12 @@ impl Parser {
         match &self.current_token.token_type {
             // Statement-only forms (always have semicolons conceptually)
             TokenType::Let => {
-                let stmt = self.parse_let_statement()?;
+                let stmt = self.parse_variable_declaration(false)?; // is_const = false
                 Ok((stmt, true)) // Let statements always end with semicolon
+            },
+            TokenType::Const => {
+                let stmt = self.parse_variable_declaration(true)?; // is_const = true
+                Ok((stmt, true)) // Const statements always end with semicolon
             },
             TokenType::Return => {
                 let stmt = self.parse_return_statement()?;
@@ -293,6 +328,25 @@ impl Parser {
             TokenType::Continue => {
                 let stmt = self.parse_continue_statement()?;
                 Ok((stmt, true)) // Continue statements always end with semicolon
+            },
+            TokenType::Static => {
+                // Look ahead to determine if this is "static let" or "static const"
+                match self.peek(1) {
+                    TokenType::Let => {
+                        let stmt = self.parse_variable_declaration(false)?; // is_const = false
+                        Ok((stmt, true))
+                    },
+                    TokenType::Const => {
+                        let stmt = self.parse_variable_declaration(true)?; // is_const = true
+                        Ok((stmt, true))
+                    },
+                    TokenType::Eof => {
+                        Err(ParseError::new("Unexpected end of input after 'static'".to_string(), self.current_token.start))
+                    },
+                    _ => {
+                        Err(ParseError::new("Expected 'let' or 'const' after 'static'".to_string(), self.current_token.start))
+                    }
+                }
             },
             TokenType::While => {
                 let stmt = self.parse_while_statement()?;
@@ -320,14 +374,27 @@ impl Parser {
         }
     }
     
-    // Parse let statement
-    fn parse_let_statement(&mut self) -> ParseResult<NodeRef> {
+    // Parse variable declaration (let or const)
+    fn parse_variable_declaration(&mut self, is_const: bool) -> ParseResult<NodeRef> {
         let start_token_index = self.token_index;
         
-        self.expect(TokenType::Let)?;
+        // Check for static modifier first
+        let is_static = if self.current_token.token_type == TokenType::Static {
+            self.advance();
+            true
+        } else {
+            false
+        };
         
-        // Check for mut keyword
-        let _is_mutable = if self.current_token.token_type == TokenType::Mut {
+        // Expect either 'let' or 'const'
+        if is_const {
+            self.expect(TokenType::Const)?;
+        } else {
+            self.expect(TokenType::Let)?;
+        }
+        
+        // Check for mut keyword (only valid with let, not const)
+        let _is_mutable = if !is_const && self.current_token.token_type == TokenType::Mut {
             self.advance();
             true
         } else {
@@ -357,8 +424,8 @@ impl Parser {
         let local = Local {
             name: name_ref,
             is_param: false,
-            is_static: false,
-            is_const: false,
+            is_static,
+            is_const,
             ty: var_type,
         };
         
@@ -367,7 +434,7 @@ impl Parser {
         self.current_function_locals.push(local);
         
         // Get current scope for binding
-        let current_scope = *self.scope_stack.last().expect("Should be in a scope when parsing let statement");
+        let current_scope = *self.scope_stack.last().expect("Should be in a scope when parsing variable declaration");
         self.bind_local(name_ref, local_index, current_scope);
         
         // Create a LocalWrite node (is_definition=true, with proper local_index)
@@ -794,6 +861,17 @@ mod tests {
     fn test_variable_declarations() {
         roundtrip("fn main() { let x = 42; }");
         roundtrip("fn main() { let y = true; }");
+        
+        // Test const declarations
+        roundtrip("fn main() { const x = 42; }");
+        roundtrip("fn main() { const y = true; }");
+        
+        // Test static declarations
+        roundtrip("fn main() { static let x = 42; }");
+        roundtrip("fn main() { static const y = true; }");
+        
+        // Test mixed let, const, and static
+        roundtrip("fn main() { let x = 1; const y = 2; static let z = 3; static const w = 4; return x; }");
     }
     
     #[test]
@@ -826,6 +904,10 @@ mod tests {
         roundtrip("fn main(x: i32) -> i32 { return x; }");
         
         roundtrip("fn main(a: i32, b: bool) -> i32 { return a; }");
+        
+        // Test static parameters
+        roundtrip("fn main(static x: i32) -> i32 { return x; }");
+        roundtrip("fn main(static a: i32, b: bool, static c: i32) -> i32 { return a; }");
     }
     
     #[test]
@@ -933,5 +1015,12 @@ mod tests {
         // Test that final unit is always suppressed
         parse_prints_as("fn main() { let x = 1; () }", "fn main() { let x = 1; }");
         roundtrip("fn main() { let x = 1; }");    // Already normalized
+    }
+    
+    #[test]
+    fn test_static_declarations_with_formatting() {
+        // Test that static parsing works even with comments between tokens
+        roundtrip("fn main() { static let x = 42; }");
+        roundtrip("fn main() { static const y = true; }");
     }
 }

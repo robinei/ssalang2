@@ -118,7 +118,7 @@ impl<'a> CodeFormatter<'a> {
             }
             
             // Handle keywords (need space after most keywords)
-            TokenType::Fn | TokenType::Let | TokenType::Mut | TokenType::If | TokenType::Else | 
+            TokenType::Fn | TokenType::Let | TokenType::Const | TokenType::Mut | TokenType::If | TokenType::Else | 
             TokenType::While | TokenType::Break | TokenType::Continue | TokenType::Return |
             TokenType::Static | TokenType::Inline => {
                 let token_text = self.get_token_text(token).to_string();

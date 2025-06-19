@@ -51,8 +51,16 @@ impl<'a> PrettyPrinter<'a> {
             Node::LocalWrite(is_definition, local_index, expr) => {
                 let var_name = self.ast.get_local_name(*local_index);
                 if *is_definition {
-                    // This is a let statement
-                    self.buffer.push_str("let ");
+                    // This is a variable declaration (let or const)
+                    let local = self.ast.get_local(*local_index);
+                    if local.is_static {
+                        self.buffer.push_str("static ");
+                    }
+                    if local.is_const {
+                        self.buffer.push_str("const ");
+                    } else {
+                        self.buffer.push_str("let ");
+                    }
                     self.buffer.push_str(var_name);
                     self.buffer.push_str(" = ");
                     self.print_expression(*expr);
@@ -186,6 +194,9 @@ impl<'a> PrettyPrinter<'a> {
                 for (i, (_local_idx, local)) in params.iter().enumerate() {
                     if i > 0 {
                         self.buffer.push_str(", ");
+                    }
+                    if local.is_static {
+                        self.buffer.push_str("static ");
                     }
                     let param_name = self.ast.get_symbol(local.name);
                     self.buffer.push_str(param_name);
