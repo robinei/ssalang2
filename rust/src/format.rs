@@ -93,11 +93,12 @@ impl<'a> CodeFormatter<'a> {
             }
             
             // Handle semantic tokens that should be emitted as-is
-            TokenType::Plus => {
+            TokenType::Plus | TokenType::Minus | TokenType::Star | TokenType::Slash => {
                 if !self.buffer.ends_with(' ') && !self.buffer.is_empty() {
                     self.buffer.push(' ');
                 }
-                self.buffer.push_str("+");
+                let token_text = self.get_token_text(token).to_string();
+                self.buffer.push_str(&token_text);
                 self.buffer.push(' ');
             }
             

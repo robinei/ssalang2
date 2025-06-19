@@ -134,8 +134,14 @@ pub enum Node {
     ConstI32(i32), // value
     ConstString(StringRef), // string_ref
 
+    // Unary operation nodes
+    UnopNeg(NodeRef), // operand
+    
     // Binary operation nodes
     BinopAdd(NodeRef, NodeRef), // left, right
+    BinopSub(NodeRef, NodeRef), // left, right
+    BinopMul(NodeRef, NodeRef), // left, right
+    BinopDiv(NodeRef, NodeRef), // left, right
     BinopEq(NodeRef, NodeRef),  // left, right
     BinopNeq(NodeRef, NodeRef), // left, right
     

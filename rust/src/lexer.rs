@@ -27,6 +27,8 @@ pub enum TokenType {
     // Operators
     Plus,      // +
     Minus,     // -
+    Star,      // *
+    Slash,     // /
     Equal,     // ==
     NotEqual,  // !=
     Assign,    // =
@@ -267,6 +269,16 @@ impl<'a> Lexer<'a> {
                 Token::new(TokenType::Plus, start_pos, 1)
             }
             
+            '*' => {
+                self.advance();
+                Token::new(TokenType::Star, start_pos, 1)
+            }
+            
+            '/' if self.peek() != '/' => {
+                self.advance();
+                Token::new(TokenType::Slash, start_pos, 1)
+            }
+            
             '=' => {
                 self.advance();
                 if self.current_char == '=' {
@@ -385,14 +397,17 @@ mod tests {
     
     #[test]
     fn test_operators() {
-        let mut lexer = Lexer::new("+ == != = ->");
+        let mut lexer = Lexer::new("+ - * / == != = ->");
         let tokens = lexer.tokenize();
         
         assert_eq!(tokens[0].token_type, TokenType::Plus);
-        assert_eq!(tokens[1].token_type, TokenType::Equal);
-        assert_eq!(tokens[2].token_type, TokenType::NotEqual);
-        assert_eq!(tokens[3].token_type, TokenType::Assign);
-        assert_eq!(tokens[4].token_type, TokenType::Arrow);
+        assert_eq!(tokens[1].token_type, TokenType::Minus);
+        assert_eq!(tokens[2].token_type, TokenType::Star);
+        assert_eq!(tokens[3].token_type, TokenType::Slash);
+        assert_eq!(tokens[4].token_type, TokenType::Equal);
+        assert_eq!(tokens[5].token_type, TokenType::NotEqual);
+        assert_eq!(tokens[6].token_type, TokenType::Assign);
+        assert_eq!(tokens[7].token_type, TokenType::Arrow);
     }
     
     #[test]

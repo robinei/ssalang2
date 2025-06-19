@@ -519,49 +519,65 @@ impl Parser {
         Ok(self.ast.add_node(continue_node, NodeInfo::new(start_token_index)))
     }
     
-    // Parse expression (handles binary operators)
+    // Parse expression using precedence climbing
     fn parse_expression(&mut self) -> ParseResult<NodeRef> {
-        self.parse_equality()
+        self.parse_expression_precedence(0)
     }
     
-    // Parse equality operators (== !=)
-    fn parse_equality(&mut self) -> ParseResult<NodeRef> {
-        let mut expr = self.parse_addition()?;
+    // Get precedence for binary operators
+    fn get_precedence(&self, token_type: TokenType) -> Option<i32> {
+        match token_type {
+            TokenType::Equal | TokenType::NotEqual => Some(1),    // Equality: lowest precedence
+            TokenType::Plus | TokenType::Minus => Some(2),       // Addition/subtraction
+            TokenType::Star | TokenType::Slash => Some(3),       // Multiplication/division: highest precedence
+            _ => None,
+        }
+    }
+    
+    // Precedence climbing algorithm
+    fn parse_expression_precedence(&mut self, min_prec: i32) -> ParseResult<NodeRef> {
+        let mut left = self.parse_atom()?;
         
-        while self.current_token.token_type == TokenType::Equal || self.current_token.token_type == TokenType::NotEqual {
+        while let Some(prec) = self.get_precedence(self.current_token.token_type) {
+            if prec < min_prec {
+                break;
+            }
+            
             let start_token_index = self.token_index;
-            let token = self.current_token;
-            let op = token.token_type.clone();
+            let op = self.current_token.token_type;
             self.advance();
             
-            let right = self.parse_addition()?;
+            // For left-associative operators, use prec + 1
+            // For right-associative operators, use prec
+            let right = self.parse_expression_precedence(prec + 1)?;
             
             let node = match op {
-                TokenType::Equal => Node::BinopEq(expr, right),
-                TokenType::NotEqual => Node::BinopNeq(expr, right),
+                TokenType::Plus => Node::BinopAdd(left, right),
+                TokenType::Minus => Node::BinopSub(left, right),
+                TokenType::Star => Node::BinopMul(left, right),
+                TokenType::Slash => Node::BinopDiv(left, right),
+                TokenType::Equal => Node::BinopEq(left, right),
+                TokenType::NotEqual => Node::BinopNeq(left, right),
                 _ => unreachable!(),
             };
             
-            expr = self.ast.add_node(node, NodeInfo::new(start_token_index));
+            left = self.ast.add_node(node, NodeInfo::new(start_token_index));
         }
         
-        Ok(expr)
+        Ok(left)
     }
     
-    // Parse addition operator (+)
-    fn parse_addition(&mut self) -> ParseResult<NodeRef> {
-        let mut expr = self.parse_primary()?;
-        
-        while self.current_token.token_type == TokenType::Plus {
+    // Parse atomic expressions (unary operators and primary expressions)
+    fn parse_atom(&mut self) -> ParseResult<NodeRef> {
+        if self.current_token.token_type == TokenType::Minus {
             let start_token_index = self.token_index;
             self.advance();
-            
-            let right = self.parse_primary()?;
-            let add_node = Node::BinopAdd(expr, right);
-            expr = self.ast.add_node(add_node, NodeInfo::new(start_token_index));
+            let operand = self.parse_atom()?; // Right-associative for multiple negations
+            let neg_node = Node::UnopNeg(operand);
+            Ok(self.ast.add_node(neg_node, NodeInfo::new(start_token_index)))
+        } else {
+            self.parse_primary()
         }
-        
-        Ok(expr)
     }
     
     // Parse primary expressions (literals, identifiers, parentheses)
@@ -570,14 +586,6 @@ impl Parser {
         let token = self.current_token;
         
         match &token.token_type {
-            TokenType::Minus => {
-                self.advance();
-                let expr = self.parse_primary()?;
-                // For simplicity, just create 0 - expr
-                let zero = self.ast.add_node(Node::ConstI32(0), NodeInfo::new(start_token_index));
-                let neg_node = Node::BinopAdd(zero, expr); // This should be subtract, but we only have add
-                Ok(self.ast.add_node(neg_node, NodeInfo::new(start_token_index)))
-            }
             TokenType::IntLiteral => {
                 let token_text = self.get_token_text(&token);
                 let value = token_text.parse::<i32>().unwrap_or(0);
@@ -802,8 +810,28 @@ mod tests {
     
     #[test]
     fn test_arithmetic_expressions() {
+        // Addition
         roundtrip("fn main() -> i32 { return 1 + 2; }");
         roundtrip("fn main() { return 5 + 10; }");
+        
+        // Subtraction
+        roundtrip("fn main() -> i32 { return 5 - 3; }");
+        roundtrip("fn main() { return 10 - 1; }");
+        
+        // Multiplication
+        roundtrip("fn main() -> i32 { return 3 * 4; }");
+        roundtrip("fn main() { return 2 * 5; }");
+        
+        // Division  
+        roundtrip("fn main() -> i32 { return 8 / 2; }");
+        roundtrip("fn main() { return 15 / 3; }");
+        
+        // Unary negation
+        roundtrip("fn main() -> i32 { return -5; }");
+        roundtrip("fn main() { return -42; }");
+        
+        // Multiple negations
+        roundtrip("fn main() -> i32 { return --5; }");
     }
     
     #[test]
@@ -889,8 +917,22 @@ mod tests {
         // Test nested arithmetic
         roundtrip("fn main() -> i32 { return 1 + 2 + 3; }");
         
-        // Test mixed operators
+        // Test mixed operators with equality
         roundtrip("fn main() -> bool { return 1 + 2 == 3; }");
+        
+        // Test operator precedence (multiplication binds tighter than addition)
+        roundtrip("fn main() -> i32 { return 1 + 2 * 3; }"); // Should be 1 + (2 * 3)
+        roundtrip("fn main() -> i32 { return 2 * 3 + 1; }"); // Should be (2 * 3) + 1
+        roundtrip("fn main() -> i32 { return 10 - 4 / 2; }"); // Should be 10 - (4 / 2)
+        roundtrip("fn main() -> i32 { return -2 * 3; }"); // Should be (-2) * 3
+        
+        // Test explicit parentheses
+        roundtrip("fn main() -> i32 { return (1 + 2) * 3; }");
+        roundtrip("fn main() -> i32 { return 10 / (4 - 2); }");
+        
+        // Test associativity
+        roundtrip("fn main() -> i32 { return 1 - 2 - 3; }"); // Should be (1 - 2) - 3
+        roundtrip("fn main() -> i32 { return 8 / 4 / 2; }"); // Should be (8 / 4) / 2
     }
     
     #[test]

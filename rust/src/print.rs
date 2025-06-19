@@ -33,9 +33,28 @@ impl<'a> PrettyPrinter<'a> {
                 self.write_escaped_string(self.ast.get_string(*string_ref));
                 self.buffer.push('"');
             }
+            Node::UnopNeg(operand) => {
+                self.buffer.push('-');
+                self.print_expression(*operand);
+            }
             Node::BinopAdd(left, right) => {
                 self.print_expression(*left);
                 self.buffer.push_str(" + ");
+                self.print_expression(*right);
+            }
+            Node::BinopSub(left, right) => {
+                self.print_expression(*left);
+                self.buffer.push_str(" - ");
+                self.print_expression(*right);
+            }
+            Node::BinopMul(left, right) => {
+                self.print_expression(*left);
+                self.buffer.push_str(" * ");
+                self.print_expression(*right);
+            }
+            Node::BinopDiv(left, right) => {
+                self.print_expression(*left);
+                self.buffer.push_str(" / ");
                 self.print_expression(*right);
             }
             Node::BinopEq(left, right) => {
@@ -221,7 +240,74 @@ impl<'a> PrettyPrinter<'a> {
     }
 
     fn print_expression(&mut self, node_ref: NodeRef) {
-        self.print_node(node_ref, 0)
+        self.print_expression_with_precedence(node_ref, 0)
+    }
+    
+    fn print_expression_with_precedence(&mut self, node_ref: NodeRef, parent_precedence: i32) {
+        let node = self.ast.get_node(node_ref);
+        let current_precedence = self.get_node_precedence(node);
+        
+        // Add parentheses if current precedence is lower than parent precedence
+        let needs_parens = current_precedence > 0 && current_precedence < parent_precedence;
+        
+        if needs_parens {
+            self.buffer.push('(');
+        }
+        
+        match node {
+            Node::BinopAdd(left, right) => {
+                self.print_expression_with_precedence(*left, current_precedence);
+                self.buffer.push_str(" + ");
+                self.print_expression_with_precedence(*right, current_precedence + 1);
+            }
+            Node::BinopSub(left, right) => {
+                self.print_expression_with_precedence(*left, current_precedence);
+                self.buffer.push_str(" - ");
+                self.print_expression_with_precedence(*right, current_precedence + 1);
+            }
+            Node::BinopMul(left, right) => {
+                self.print_expression_with_precedence(*left, current_precedence);
+                self.buffer.push_str(" * ");
+                self.print_expression_with_precedence(*right, current_precedence + 1);
+            }
+            Node::BinopDiv(left, right) => {
+                self.print_expression_with_precedence(*left, current_precedence);
+                self.buffer.push_str(" / ");
+                self.print_expression_with_precedence(*right, current_precedence + 1);
+            }
+            Node::BinopEq(left, right) => {
+                self.print_expression_with_precedence(*left, current_precedence);
+                self.buffer.push_str(" == ");
+                self.print_expression_with_precedence(*right, current_precedence + 1);
+            }
+            Node::BinopNeq(left, right) => {
+                self.print_expression_with_precedence(*left, current_precedence);
+                self.buffer.push_str(" != ");
+                self.print_expression_with_precedence(*right, current_precedence + 1);
+            }
+            Node::UnopNeg(operand) => {
+                self.buffer.push('-');
+                self.print_expression_with_precedence(*operand, current_precedence);
+            }
+            _ => {
+                // For non-expression nodes, just print normally
+                self.print_node(node_ref, 0);
+            }
+        }
+        
+        if needs_parens {
+            self.buffer.push(')');
+        }
+    }
+    
+    fn get_node_precedence(&self, node: &Node) -> i32 {
+        match node {
+            Node::BinopEq(_, _) | Node::BinopNeq(_, _) => 1,  // Equality: lowest precedence
+            Node::BinopAdd(_, _) | Node::BinopSub(_, _) => 2, // Addition/subtraction
+            Node::BinopMul(_, _) | Node::BinopDiv(_, _) => 3, // Multiplication/division: highest precedence
+            Node::UnopNeg(_) => 4,                            // Unary operators: highest precedence
+            _ => 0,                                           // Non-operators don't have precedence
+        }
     }
 
     fn write_type_atom(&mut self, atom: TypeAtom) {
