@@ -225,7 +225,7 @@ impl Parser {
         self.expect(TokenType::Colon)?;
         let param_type = self.parse_type()?;
         
-        let name_ref = self.ast.add_symbol(param_name);
+        let name_ref = self.ast.intern_symbol(param_name);
         
         Ok(Local {
             name: name_ref,
@@ -285,9 +285,16 @@ impl Parser {
         let mut last_had_semicolon = false;
         
         while self.current_token.token_type != TokenType::RightBrace {
-            let (stmt, had_semicolon) = self.parse_statement_with_semicolon_info()?;
+            let stmt = self.parse_statement()?;
             statements.push(stmt);
-            last_had_semicolon = had_semicolon;
+            
+            // Check if this statement ends with a semicolon
+            last_had_semicolon = if self.current_token.token_type == TokenType::Semicolon {
+                self.advance();
+                true
+            } else {
+                false
+            };
         }
         
         // If empty block OR last statement had semicolon, add ConstUnit
@@ -305,40 +312,33 @@ impl Parser {
         Ok(self.ast.add_node(block_node, NodeInfo::new(start_token_index)))
     }
     
-    // Parse a statement and return whether it ended with a semicolon
-    fn parse_statement_with_semicolon_info(&mut self) -> ParseResult<(NodeRef, bool)> {
+    // Parse a statement
+    fn parse_statement(&mut self) -> ParseResult<NodeRef> {
         match &self.current_token.token_type {
-            // Statement-only forms (always have semicolons conceptually)
+            // Statement-only forms
             TokenType::Let => {
-                let stmt = self.parse_variable_declaration(false)?; // is_const = false
-                Ok((stmt, true)) // Let statements always end with semicolon
+                self.parse_variable_declaration(false) // is_const = false
             },
             TokenType::Const => {
-                let stmt = self.parse_variable_declaration(true)?; // is_const = true
-                Ok((stmt, true)) // Const statements always end with semicolon
+                self.parse_variable_declaration(true) // is_const = true
             },
             TokenType::Return => {
-                let stmt = self.parse_return_statement()?;
-                Ok((stmt, true)) // Return statements always end with semicolon
+                self.parse_return_statement()
             },
             TokenType::Break => {
-                let stmt = self.parse_break_statement()?;
-                Ok((stmt, true)) // Break statements always end with semicolon
+                self.parse_break_statement()
             },
             TokenType::Continue => {
-                let stmt = self.parse_continue_statement()?;
-                Ok((stmt, true)) // Continue statements always end with semicolon
+                self.parse_continue_statement()
             },
             TokenType::Static => {
                 // Look ahead to determine if this is "static let" or "static const"
                 match self.peek(1) {
                     TokenType::Let => {
-                        let stmt = self.parse_variable_declaration(false)?; // is_const = false
-                        Ok((stmt, true))
+                        self.parse_variable_declaration(false) // is_const = false
                     },
                     TokenType::Const => {
-                        let stmt = self.parse_variable_declaration(true)?; // is_const = true
-                        Ok((stmt, true))
+                        self.parse_variable_declaration(true) // is_const = true
                     },
                     TokenType::Eof => {
                         Err(ParseError::new("Unexpected end of input after 'static'".to_string(), self.current_token.start))
@@ -349,27 +349,17 @@ impl Parser {
                 }
             },
             TokenType::While => {
-                let stmt = self.parse_while_statement()?;
-                Ok((stmt, true)) // While statements always end with semicolon (statement-only)
+                self.parse_while_statement()
             },
-            // Expression forms (can be used as final expression)
+            // Expression forms
             TokenType::If => {
-                let expr = self.parse_if_statement()?;
-                Ok((expr, false)) // If expressions don't need semicolons
+                self.parse_if_statement()
             },
             TokenType::LeftBrace => {
-                let expr = self.parse_block()?;
-                Ok((expr, false)) // Block expressions don't need semicolons
+                self.parse_block()
             },
             _ => {
-                let expr = self.parse_expression()?;
-                let had_semicolon = if self.current_token.token_type == TokenType::Semicolon {
-                    self.advance();
-                    true
-                } else {
-                    false
-                };
-                Ok((expr, had_semicolon))
+                self.parse_expression()
             }
         }
     }
@@ -393,14 +383,6 @@ impl Parser {
             self.expect(TokenType::Let)?;
         }
         
-        // Check for mut keyword (only valid with let, not const)
-        let _is_mutable = if !is_const && self.current_token.token_type == TokenType::Mut {
-            self.advance();
-            true
-        } else {
-            false
-        };
-        
         // Variable name
         let var_name = if let TokenType::Identifier = &self.current_token.token_type {
             let name_text = self.get_token_text(&self.current_token).to_string();
@@ -413,12 +395,8 @@ impl Parser {
         self.expect(TokenType::Assign)?;
         let expr = self.parse_expression()?;
         
-        if self.current_token.token_type == TokenType::Semicolon {
-            self.advance();
-        }
-        
         // Create a Local entry for this variable
-        let name_ref = self.ast.add_symbol(var_name);
+        let name_ref = self.ast.intern_symbol(var_name);
         // For now, assume i32 type - in a real implementation this would be inferred
         let var_type = self.ast.add_node(Node::TypeAtom(TypeAtom::I32), NodeInfo::new(self.token_index));
         let local = Local {
@@ -461,14 +439,15 @@ impl Parser {
                 self.parse_block()?
             }
         } else {
-            // No else clause - create empty block
+            // No else clause - create block with unit value
             let flags = Flags::new();
-            let empty_statements = StatementsRef::empty();
-            self.ast.add_node(Node::Block(flags, 0, empty_statements), NodeInfo::new(self.token_index))
+            let unit_node = self.ast.add_node(Node::ConstUnit, NodeInfo::new(self.token_index));
+            let statements_ref = self.ast.add_statements(&[unit_node]);
+            self.ast.add_node(Node::Block(flags, 0, statements_ref), NodeInfo::new(self.token_index))
         };
         
         let flags = Flags::new();
-        let if_node = Node::If(flags, 0, cond, then_block, else_block);
+        let if_node = Node::If(flags, cond, then_block, else_block);
         Ok(self.ast.add_node(if_node, NodeInfo::new(start_token_index)))
     }
     
@@ -482,7 +461,7 @@ impl Parser {
         let body = self.parse_block()?;
         
         let flags = Flags::new();
-        let while_node = Node::While(flags, 0, cond, body);
+        let while_node = Node::While(flags, cond, body);
         Ok(self.ast.add_node(while_node, NodeInfo::new(start_token_index)))
     }
     
@@ -492,16 +471,13 @@ impl Parser {
         
         self.expect(TokenType::Return)?;
         
+        // Check if this is a bare return (return;) vs return with value
         let value = if self.current_token.token_type == TokenType::Semicolon {
-            // Return unit
+            // Return unit for bare return
             self.ast.add_node(Node::ConstUnit, NodeInfo::new(self.token_index))
         } else {
             self.parse_expression()?
         };
-        
-        if self.current_token.token_type == TokenType::Semicolon {
-            self.advance();
-        }
         
         let return_node = Node::Return(value);
         Ok(self.ast.add_node(return_node, NodeInfo::new(start_token_index)))
@@ -520,10 +496,6 @@ impl Parser {
             self.parse_expression()?
         };
         
-        if self.current_token.token_type == TokenType::Semicolon {
-            self.advance();
-        }
-        
         let flags = Flags::new();
         let break_node = Node::Break(flags, 0, value);
         Ok(self.ast.add_node(break_node, NodeInfo::new(start_token_index)))
@@ -541,10 +513,6 @@ impl Parser {
         } else {
             self.parse_expression()?
         };
-        
-        if self.current_token.token_type == TokenType::Semicolon {
-            self.advance();
-        }
         
         let flags = Flags::new();
         let continue_node = Node::Continue(flags, 0, value);
@@ -645,7 +613,7 @@ impl Parser {
                 self.advance();
                 
                 // Look up identifier in binding map
-                let name_ref = self.ast.add_symbol(identifier_text.clone());
+                let name_ref = self.ast.intern_symbol(identifier_text.clone());
                 
                 if let Some(local_index) = self.lookup_local(name_ref) {
                     // Found binding - create LocalRead
@@ -876,10 +844,11 @@ mod tests {
     
     #[test]
     fn test_if_statements() {
-        // The first test fails because the parser creates an empty else clause which the pretty printer renders as \"void\"
-        // For now, we skip this case: roundtrip(\"fn main() { if true { return 1; } }\");
-        
+        // Test if with explicit else
         roundtrip("fn main() { if false { return 1; } else { return 2; } }");
+        
+        // Test if without else (implicit unit else clause) - stays implicit
+        roundtrip("fn main() { if true { return 1; } }");
         
         // Test else-if chains
         roundtrip("fn main() { let x = 0; if x == 1 { return 1; } else if x == 2 { return 2; } else { return 0; } }");

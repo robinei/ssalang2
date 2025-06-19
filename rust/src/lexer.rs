@@ -8,7 +8,6 @@ pub enum TokenType {
     // Keywords
     Let,
     Const,
-    Mut,
     Fn,
     If,
     Else,
@@ -205,10 +204,6 @@ impl<'a> Lexer<'a> {
                 "let" => TokenType::Let,
                 _ => TokenType::Identifier,
             },
-            'm' => match ident {
-                "mut" => TokenType::Mut,
-                _ => TokenType::Identifier,
-            },
             'r' => match ident {
                 "return" => TokenType::Return,
                 _ => TokenType::Identifier,
@@ -375,18 +370,17 @@ mod tests {
     
     #[test]
     fn test_basic_tokens() {
-        let mut lexer = Lexer::new("let const mut fn if else while");
+        let mut lexer = Lexer::new("let const fn if else while");
         let tokens = lexer.tokenize();
         
-        assert_eq!(tokens.len(), 8); // 7 tokens + EOF
+        assert_eq!(tokens.len(), 7); // 8 tokens + EOF
         assert_eq!(tokens[0].token_type, TokenType::Let);
         assert_eq!(tokens[1].token_type, TokenType::Const);
-        assert_eq!(tokens[2].token_type, TokenType::Mut);
-        assert_eq!(tokens[3].token_type, TokenType::Fn);
-        assert_eq!(tokens[4].token_type, TokenType::If);
-        assert_eq!(tokens[5].token_type, TokenType::Else);
-        assert_eq!(tokens[6].token_type, TokenType::While);
-        assert_eq!(tokens[7].token_type, TokenType::Eof);
+        assert_eq!(tokens[2].token_type, TokenType::Fn);
+        assert_eq!(tokens[3].token_type, TokenType::If);
+        assert_eq!(tokens[4].token_type, TokenType::Else);
+        assert_eq!(tokens[5].token_type, TokenType::While);
+        assert_eq!(tokens[6].token_type, TokenType::Eof);
     }
     
     #[test]

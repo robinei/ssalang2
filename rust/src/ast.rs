@@ -145,8 +145,8 @@ pub enum Node {
     
     // Control flow nodes
     Block(Flags, ScopeIndex, StatementsRef), // flags, scope_index, statements
-    If(Flags, ScopeIndex, NodeRef, NodeRef, NodeRef), // flags, scope_index, cond, then, els
-    While(Flags, ScopeIndex, NodeRef, NodeRef), // flags, scope_index, cond, body
+    If(Flags, NodeRef, NodeRef, NodeRef), // flags, cond, then, els
+    While(Flags, NodeRef, NodeRef), // flags, cond, body
     
     // Jump nodes
     Break(Flags, ScopeIndex, NodeRef), // flags, scope_index, value
@@ -286,7 +286,7 @@ impl Ast {
     }
 
     // Symbol storage methods (for identifiers, interned)
-    pub fn add_symbol(&mut self, symbol: String) -> SymbolRef {
+    pub fn intern_symbol(&mut self, symbol: String) -> SymbolRef {
         // Check if symbol already exists (interning)
         if let Some(&existing_ref) = self.symbol_map.get(&symbol) {
             return existing_ref;
@@ -337,10 +337,10 @@ mod tests {
         let mut ast = Ast::new();
         
         // Add the same symbol multiple times
-        let sym1 = ast.add_symbol("test".to_string());
-        let sym2 = ast.add_symbol("test".to_string());
-        let sym3 = ast.add_symbol("different".to_string());
-        let sym4 = ast.add_symbol("test".to_string());
+        let sym1 = ast.intern_symbol("test".to_string());
+        let sym2 = ast.intern_symbol("test".to_string());
+        let sym3 = ast.intern_symbol("different".to_string());
+        let sym4 = ast.intern_symbol("test".to_string());
         
         // Should only have 2 unique symbols stored
         assert_eq!(ast.symbol_count(), 2);

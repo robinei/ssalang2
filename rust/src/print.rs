@@ -111,7 +111,7 @@ impl<'a> PrettyPrinter<'a> {
                     self.buffer.push_str(" }");
                 }
             }
-            Node::If(flags, _scope_index, cond, then_branch, else_branch) => {
+            Node::If(flags, cond, then_branch, else_branch) => {
                 if flags.is_static() {
                     self.buffer.push_str("static ");
                 }
@@ -128,7 +128,7 @@ impl<'a> PrettyPrinter<'a> {
                 
                 // Handle else branch (Block or If node, but might be empty)
                 if self.is_block_node(*else_branch) {
-                    if !self.is_empty_block(*else_branch) {
+                    if !self.is_empty_or_unit_only_block(*else_branch) {
                         self.buffer.push_str(" else ");
                         self.print_node(*else_branch, 0);
                     }
@@ -137,7 +137,7 @@ impl<'a> PrettyPrinter<'a> {
                     self.print_node(*else_branch, 0);
                 }
             }
-            Node::While(flags, _scope_index, cond, body) => {
+            Node::While(flags, cond, body) => {
                 if flags.is_static() {
                     self.buffer.push_str("static ");
                 }
@@ -267,16 +267,21 @@ impl<'a> PrettyPrinter<'a> {
     }
 
     fn is_if_node(&self, node_ref: NodeRef) -> bool {
-        matches!(self.ast.get_node(node_ref), Node::If(_, _, _, _, _))
+        matches!(self.ast.get_node(node_ref), Node::If(_, _, _, _))
     }
 
-    fn is_empty_block(&self, node_ref: NodeRef) -> bool {
-        // Check if this is a Block with no statements
+    fn is_empty_or_unit_only_block(&self, node_ref: NodeRef) -> bool {
+        // Check if this is a Block with no statements or only unit value
         if let Node::Block(_, _, statements_ref) = self.ast.get_node(node_ref) {
-            statements_ref.count == 0
-        } else {
-            false
+            if statements_ref.count == 0 {
+                return true;
+            }
+            if statements_ref.count == 1 {
+                let statements = self.ast.get_statements(*statements_ref);
+                return self.is_unit_value(statements[0]);
+            }
         }
+        false
     }
 
     fn is_unit_value(&self, node_ref: NodeRef) -> bool {
