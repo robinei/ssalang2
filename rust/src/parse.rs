@@ -824,11 +824,7 @@ impl Parser {
         // Parse semantically using the token stream
         let mut parser = Parser::new(all_tokens.clone(), input.to_string());
         parser.parse_root()?;
-        let mut ast = parser.into_ast();
-
-        // Store the full token stream and source in the AST
-        ast.set_tokens(all_tokens);
-        ast.set_source(input.to_string());
+        let ast = parser.into_ast();
 
         Ok(ast)
     }

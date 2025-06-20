@@ -1,4 +1,4 @@
-use ssalang2::format::CodeFormatter;
+use ssalang2::print::PrettyPrinter;
 use ssalang2::parse::{Parser, ParseError};
 use std::env;
 use std::fs;
@@ -97,8 +97,8 @@ fn main() {
     };
     
     // Format the code
-    let formatter = CodeFormatter::new(&ast);
-    let formatted_code = formatter.format();
+    let formatter = PrettyPrinter::with_indent(&ast, 4);
+    let formatted_code = formatter.print();
     
     // Output the formatted code
     print!("{}", formatted_code);

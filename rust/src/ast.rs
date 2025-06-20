@@ -1,5 +1,3 @@
-use crate::lexer::Token;
-
 pub type LocalIndex = u16;
 pub type ScopeIndex = u16;
 
@@ -199,8 +197,6 @@ pub struct Ast {
     strings: Vec<String>,     // String storage for string literals
     symbols: Vec<String>,     // Symbol storage for identifiers (interned)
     symbol_map: std::collections::HashMap<String, SymbolRef>, // For symbol interning
-    tokens: Vec<Token>,       // Full token stream including formatting tokens
-    source: String,           // Original source text for token text extraction
     root: Option<NodeRef>,    // Root node of the tree
 }
 
@@ -214,8 +210,6 @@ impl Ast {
             strings: Vec::new(),
             symbols: Vec::new(),
             symbol_map: std::collections::HashMap::new(),
-            tokens: Vec::new(),
-            source: String::new(),
             root: None,
         }
     }
@@ -318,23 +312,6 @@ impl Ast {
     pub fn get_symbol(&self, symbol_ref: SymbolRef) -> &str {
         let index = symbol_ref.get() as usize;
         &self.symbols[index]
-    }
-
-    // Token storage methods
-    pub fn set_tokens(&mut self, tokens: Vec<Token>) {
-        self.tokens = tokens;
-    }
-
-    pub fn get_tokens(&self) -> &[Token] {
-        &self.tokens
-    }
-
-    pub fn set_source(&mut self, source: String) {
-        self.source = source;
-    }
-
-    pub fn get_source(&self) -> &str {
-        &self.source
     }
 
     // Debug method to check symbol interning
