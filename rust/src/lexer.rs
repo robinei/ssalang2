@@ -23,6 +23,7 @@ pub enum TokenType {
     // Types
     Bool,
     I32,
+    Unit,
 
     // Operators
     Plus,     // +
@@ -224,6 +225,10 @@ impl<'a> Lexer<'a> {
             },
             't' => match ident {
                 "true" => TokenType::True,
+                _ => TokenType::Identifier,
+            },
+            'u' => match ident {
+                "unit" => TokenType::Unit,
                 _ => TokenType::Identifier,
             },
             'w' => match ident {

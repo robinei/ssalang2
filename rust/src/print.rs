@@ -315,7 +315,7 @@ impl<'a> PrettyPrinter<'a> {
 
     fn write_type_atom(&mut self, atom: TypeAtom) {
         match atom {
-            TypeAtom::Unit => self.buffer.push_str("()"),
+            TypeAtom::Unit => self.buffer.push_str("unit"),
             TypeAtom::Bool => self.buffer.push_str("bool"),
             TypeAtom::I32 => self.buffer.push_str("i32"),
         }

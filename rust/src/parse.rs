@@ -271,21 +271,12 @@ impl Parser {
                     NodeInfo::new(start_token_index),
                 ))
             }
-            TokenType::LeftParen => {
-                // Parse () as unit type
-                self.advance(); // consume '('
-                if self.current_token.token_type == TokenType::RightParen {
-                    self.advance(); // consume ')'
-                    Ok(self.ast.add_node(
-                        Node::TypeAtom(TypeAtom::Unit),
-                        NodeInfo::new(start_token_index),
-                    ))
-                } else {
-                    Err(ParseError::new(
-                        "Expected ')' after '(' in unit type".to_string(),
-                        self.current_token.start,
-                    ))
-                }
+            TokenType::Unit => {
+                self.advance();
+                Ok(self.ast.add_node(
+                    Node::TypeAtom(TypeAtom::Unit),
+                    NodeInfo::new(start_token_index),
+                ))
             }
             _ => Err(ParseError::new("Expected type".to_string(), token.start)),
         }
