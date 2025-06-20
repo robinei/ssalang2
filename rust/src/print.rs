@@ -3,13 +3,19 @@ use crate::ast::{Ast, Node, NodeRef, TypeAtom};
 pub struct PrettyPrinter<'a> {
     ast: &'a Ast,
     buffer: String,
+    indent_size: usize,
 }
 
 impl<'a> PrettyPrinter<'a> {
     pub fn new(ast: &'a Ast) -> Self {
+        Self::with_indent(ast, 0) // Default to single-line (0 indent)
+    }
+
+    pub fn with_indent(ast: &'a Ast, indent_size: usize) -> Self {
         Self {
             ast,
             buffer: String::with_capacity(1024), // Pre-allocate reasonable capacity
+            indent_size,
         }
     }
 
@@ -21,7 +27,16 @@ impl<'a> PrettyPrinter<'a> {
         self.buffer
     }
 
-    fn print_node(&mut self, node_ref: NodeRef, _indent: usize) {
+    fn write_indent(&mut self, level: usize) {
+        self.buffer.push_str(&" ".repeat(level * self.indent_size));
+    }
+
+    fn write_newline(&mut self) {
+        self.buffer.push('\n');
+    }
+
+
+    fn print_node(&mut self, node_ref: NodeRef, indent: usize) {
         let node = self.ast.get_node(node_ref);
         match node {
             Node::TypeAtom(atom) => self.write_type_atom(*atom),
@@ -33,39 +48,11 @@ impl<'a> PrettyPrinter<'a> {
                 self.write_escaped_string(self.ast.get_string(*string_ref));
                 self.buffer.push('"');
             }
-            Node::UnopNeg(operand) => {
-                self.buffer.push('-');
-                self.print_expression(*operand);
-            }
-            Node::BinopAdd(left, right) => {
-                self.print_expression(*left);
-                self.buffer.push_str(" + ");
-                self.print_expression(*right);
-            }
-            Node::BinopSub(left, right) => {
-                self.print_expression(*left);
-                self.buffer.push_str(" - ");
-                self.print_expression(*right);
-            }
-            Node::BinopMul(left, right) => {
-                self.print_expression(*left);
-                self.buffer.push_str(" * ");
-                self.print_expression(*right);
-            }
-            Node::BinopDiv(left, right) => {
-                self.print_expression(*left);
-                self.buffer.push_str(" / ");
-                self.print_expression(*right);
-            }
-            Node::BinopEq(left, right) => {
-                self.print_expression(*left);
-                self.buffer.push_str(" == ");
-                self.print_expression(*right);
-            }
-            Node::BinopNeq(left, right) => {
-                self.print_expression(*left);
-                self.buffer.push_str(" != ");
-                self.print_expression(*right);
+            // Operators are handled by print_expression
+            Node::UnopNeg(_) | Node::BinopAdd(_, _) | Node::BinopSub(_, _) | 
+            Node::BinopMul(_, _) | Node::BinopDiv(_, _) | Node::BinopEq(_, _) | 
+            Node::BinopNeq(_, _) => {
+                self.print_expression(node_ref);
             }
             Node::LocalWrite(is_definition, local_index, expr) => {
                 let var_name = self.ast.get_local_name(*local_index);
@@ -119,13 +106,24 @@ impl<'a> PrettyPrinter<'a> {
 
                 if printed_statements.is_empty() {
                     self.buffer.push_str("{ }");
+                } else if self.indent_size > 0 {
+                    self.buffer.push('{');
+                    self.write_newline();
+                    for &statement in &printed_statements {
+                        self.write_indent(indent + 1);
+                        self.print_node(statement, indent + 1);
+                        self.write_newline();
+                    }
+                    self.write_indent(indent);
+                    self.buffer.push('}');
                 } else {
+                    // Original compact single-line format
                     self.buffer.push_str("{ ");
                     for (i, &statement) in printed_statements.iter().enumerate() {
                         if i > 0 {
                             self.buffer.push(' ');
                         }
-                        self.print_node(statement, 0);
+                        self.print_node(statement, indent);
                     }
                     self.buffer.push_str(" }");
                 }
@@ -143,17 +141,17 @@ impl<'a> PrettyPrinter<'a> {
                 self.buffer.push(' ');
 
                 // Handle then branch (always a Block)
-                self.print_node(*then_branch, 0);
+                self.print_node(*then_branch, indent);
 
                 // Handle else branch (Block or If node, but might be empty)
                 if self.is_block_node(*else_branch) {
                     if !self.is_empty_or_unit_only_block(*else_branch) {
                         self.buffer.push_str(" else ");
-                        self.print_node(*else_branch, 0);
+                        self.print_node(*else_branch, indent);
                     }
                 } else if self.is_if_node(*else_branch) {
                     self.buffer.push_str(" else ");
-                    self.print_node(*else_branch, 0);
+                    self.print_node(*else_branch, indent);
                 }
             }
             Node::While(flags, cond, body) => {
@@ -169,7 +167,7 @@ impl<'a> PrettyPrinter<'a> {
                 self.buffer.push(' ');
 
                 // Handle body (always a Block)
-                self.print_node(*body, 0);
+                self.print_node(*body, indent);
             }
             Node::Break(_flags, _scope_index, value) => {
                 if self.is_unit_value(*value) {
@@ -239,7 +237,7 @@ impl<'a> PrettyPrinter<'a> {
                 self.buffer.push(' ');
 
                 // Print function body (always a Block)
-                self.print_node(*body, 0);
+                self.print_node(*body, indent);
             }
         }
     }
@@ -323,12 +321,6 @@ impl<'a> PrettyPrinter<'a> {
         }
     }
 
-    #[allow(dead_code)]
-    fn write_indent(&mut self, indent: usize) {
-        for _ in 0..indent {
-            self.buffer.push_str("  ");
-        }
-    }
 
     fn write_escaped_string(&mut self, s: &str) {
         for ch in s.chars() {
@@ -378,5 +370,28 @@ impl<'a> PrettyPrinter<'a> {
     fn is_unit_value(&self, node_ref: NodeRef) -> bool {
         // Check if this represents a unit value (like empty break/continue)
         matches!(self.ast.get_node(node_ref), Node::ConstUnit)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parse::Parser;
+
+    #[test]
+    fn test_multiline_indentation() {
+        let source = r#"fn main() { let x = 42; if x == 42 { return true; } else { return false; } }"#;
+        let ast = Parser::parse(source).unwrap();
+        
+        // Test single-line (default)
+        let printer = PrettyPrinter::new(&ast);
+        let single_line = printer.print();
+        assert_eq!(single_line, "fn main() { let x = 42; if x == 42 { return true; } else { return false; } }");
+        
+        // Test multi-line with 2-space indentation
+        let printer = PrettyPrinter::with_indent(&ast, 2);
+        let multi_line = printer.print();
+        let expected = "fn main() {\n  let x = 42;\n  if x == 42 {\n    return true;\n  } else {\n    return false;\n  }\n}";
+        assert_eq!(multi_line, expected);
     }
 }
