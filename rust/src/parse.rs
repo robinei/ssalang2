@@ -13,6 +13,7 @@ enum ScopeCleanup {
 pub struct Parser {
     tokens: Vec<Token>,
     token_index: usize,
+    prev_token: Token,
     current_token: Token,
     source: String,
     ast: Ast,
@@ -46,6 +47,7 @@ impl Parser {
         let mut parser = Self {
             tokens,
             token_index: 0,
+            prev_token: Token::new(TokenType::Eof, 0, 0),
             current_token: Token::new(TokenType::Eof, 0, 0),
             source,
             ast: Ast::new(),
@@ -61,6 +63,8 @@ impl Parser {
     }
 
     fn update_current_token(&mut self) {
+        self.prev_token = self.current_token;
+
         // Skip formatting tokens to find next semantic token
         while self.token_index < self.tokens.len() {
             self.current_token = self.tokens[self.token_index];
@@ -86,26 +90,6 @@ impl Parser {
         self.update_current_token();
     }
 
-    fn peek(&self, n: usize) -> TokenType {
-        // Look ahead n semantic tokens from current position
-        let mut peek_index = self.token_index;
-        let mut semantic_count = 0;
-
-        while peek_index < self.tokens.len() {
-            let token = &self.tokens[peek_index];
-            if !matches!(token.token_type, TokenType::Comment | TokenType::EmptyLine) {
-                if semantic_count == n {
-                    return token.token_type;
-                }
-                semantic_count += 1;
-            }
-            peek_index += 1;
-        }
-
-        // If we can't find the nth token, return EOF
-        TokenType::Eof
-    }
-
     fn expect(&mut self, expected: TokenType) -> ParseResult<Token> {
         let token = self.current_token;
         if token.token_type == expected {
@@ -119,21 +103,47 @@ impl Parser {
         }
     }
 
-    // Parse the entire program
     pub fn parse_root(&mut self) -> ParseResult<NodeRef> {
-        let root = self.parse_function()?;
+        let root = self.parse_module()?;
         self.ast.set_root(root);
         Ok(root)
     }
 
-    // Parse a function definition
+    fn parse_module(&mut self) -> ParseResult<NodeRef> {
+        let start_token_index = self.token_index;
+        let mut nodes = Vec::new();
+
+        let module_scope_id = self.enter_scope();
+
+        while self.current_token.token_type != TokenType::Eof {
+            let node = self.parse_top_level_definition()?;
+            nodes.push(node);
+        }
+
+        self.exit_scope(module_scope_id);
+
+        let nodes_ref = self.ast.add_node_refs(&nodes);
+        let module_node = Node::Module(nodes_ref);
+        let info = NodeInfo::new(start_token_index);
+        Ok(self.ast.add_node(module_node, info))
+    }
+
+    fn parse_top_level_definition(&mut self) -> ParseResult<NodeRef> {
+        match self.current_token.token_type {
+            TokenType::Const => self.parse_variable_declaration(true),
+            TokenType::Inline | TokenType::Fn => self.parse_function(),
+            _ => Err(ParseError::new(
+                format!("Expected function or constant definition, found {:?}", self.current_token.token_type),
+                self.current_token.start,
+            ))
+        }
+    }
+
     fn parse_function(&mut self) -> ParseResult<NodeRef> {
         let start_token_index = self.token_index;
 
-        // Parse function flags
         let mut flags = Flags::new();
 
-        // Check for static/inline modifiers
         if self.current_token.token_type == TokenType::Static {
             flags.set_is_static(true);
             self.advance();
@@ -146,15 +156,15 @@ impl Parser {
 
         self.expect(TokenType::Fn)?;
 
-        // Function name (ignored for now)
-        if let TokenType::Identifier = &self.current_token.token_type {
-            self.advance();
-        } else {
+        if self.current_token.token_type  != TokenType::Identifier {
             return Err(ParseError::new(
                 "Expected function name".to_string(),
                 self.current_token.start,
             ));
         }
+        let name = self.get_token_text(&self.current_token).to_owned();
+        let _name_sym = self.ast.intern_symbol(name); // TODO: store
+        self.advance();
 
         // Enter function scope for parameters and body
         let function_scope_id = self.enter_scope();
@@ -307,12 +317,7 @@ impl Parser {
             statements.push(stmt);
 
             // Check if this statement ends with a semicolon
-            last_had_semicolon = if self.current_token.token_type == TokenType::Semicolon {
-                self.advance();
-                true
-            } else {
-                false
-            };
+            last_had_semicolon = self.prev_token.token_type == TokenType::Semicolon;
         }
 
         // If empty block OR last statement had semicolon, add ConstUnit
@@ -325,9 +330,7 @@ impl Parser {
 
         self.expect(TokenType::RightBrace)?;
 
-        // Add statements to AST and get reference
-        let statements_ref = self.ast.add_statements(&statements);
-
+        let statements_ref = self.ast.add_node_refs(&statements);
         let block_node = Node::Block(flags, scope_id, statements_ref);
         Ok(self
             .ast
@@ -338,24 +341,16 @@ impl Parser {
     fn parse_statement(&mut self) -> ParseResult<NodeRef> {
         match &self.current_token.token_type {
             // Statement-only forms
-            TokenType::Let => {
-                self.parse_variable_declaration(false) // is_const = false
-            }
-            TokenType::Const => {
-                self.parse_variable_declaration(true) // is_const = true
-            }
+            TokenType::Let => self.parse_variable_declaration(false),
+            TokenType::Const => self.parse_variable_declaration(true),
             TokenType::Return => self.parse_return_statement(),
             TokenType::Break => self.parse_break_statement(),
             TokenType::Continue => self.parse_continue_statement(),
             TokenType::Static => {
-                // Look ahead to determine if this is "static let" or "static const"
-                match self.peek(1) {
-                    TokenType::Let => {
-                        self.parse_variable_declaration(false) // is_const = false
-                    }
-                    TokenType::Const => {
-                        self.parse_variable_declaration(true) // is_const = true
-                    }
+                self.advance();
+                match self.current_token.token_type {
+                    TokenType::Let => self.parse_variable_declaration(false),
+                    TokenType::Const => self.parse_variable_declaration(true),
                     TokenType::Eof => Err(ParseError::new(
                         "Unexpected end of input after 'static'".to_string(),
                         self.current_token.start,
@@ -407,6 +402,7 @@ impl Parser {
 
         self.expect(TokenType::Assign)?;
         let expr = self.parse_expression()?;
+        self.expect(TokenType::Semicolon)?;
 
         // Create a Local entry for this variable
         let name_ref = self.ast.intern_symbol(var_name);
@@ -464,7 +460,7 @@ impl Parser {
             let unit_node = self
                 .ast
                 .add_node(Node::ConstUnit, NodeInfo::new(self.token_index));
-            let statements_ref = self.ast.add_statements(&[unit_node]);
+            let statements_ref = self.ast.add_node_refs(&[unit_node]);
             self.ast.add_node(
                 Node::Block(flags, 0, statements_ref),
                 NodeInfo::new(self.token_index),
@@ -507,6 +503,8 @@ impl Parser {
             self.parse_expression()?
         };
 
+        self.expect(TokenType::Semicolon)?;
+
         let return_node = Node::Return(value);
         Ok(self
             .ast
@@ -526,6 +524,8 @@ impl Parser {
         } else {
             self.parse_expression()?
         };
+
+        self.expect(TokenType::Semicolon)?;
 
         let flags = Flags::new();
         let break_node = Node::Break(flags, 0, value);
@@ -548,6 +548,8 @@ impl Parser {
             self.parse_expression()?
         };
 
+        self.expect(TokenType::Semicolon)?;
+
         let flags = Flags::new();
         let continue_node = Node::Continue(flags, 0, value);
         Ok(self
@@ -563,9 +565,16 @@ impl Parser {
     // Get precedence for binary operators
     fn get_precedence(&self, token_type: TokenType) -> Option<i32> {
         match token_type {
-            TokenType::Equal | TokenType::NotEqual => Some(1), // Equality: lowest precedence
-            TokenType::Plus | TokenType::Minus => Some(2),     // Addition/subtraction
-            TokenType::Star | TokenType::Slash => Some(3), // Multiplication/division: highest precedence
+            TokenType::Or => Some(1),                           // Logical OR: lowest precedence
+            TokenType::And => Some(2),                          // Logical AND
+            TokenType::Equal | TokenType::NotEqual | 
+            TokenType::Lt | TokenType::Gt | 
+            TokenType::LtEq | TokenType::GtEq => Some(3),       // Equality and comparison
+            TokenType::Plus | TokenType::Minus => Some(4),      // Addition/subtraction
+            TokenType::Star | TokenType::Slash => Some(5),      // Multiplication/division: highest precedence
+            // Bitwise operators are not yet supported in parser
+            // TokenType::BitOr => Some(?),
+            // TokenType::BitAnd => Some(?),
             _ => None,
         }
     }
@@ -594,6 +603,12 @@ impl Parser {
                 TokenType::Slash => Node::BinopDiv(left, right),
                 TokenType::Equal => Node::BinopEq(left, right),
                 TokenType::NotEqual => Node::BinopNeq(left, right),
+                TokenType::Lt => Node::BinopLt(left, right),
+                TokenType::Gt => Node::BinopGt(left, right),
+                TokenType::LtEq => Node::BinopLtEq(left, right),
+                TokenType::GtEq => Node::BinopGtEq(left, right),
+                TokenType::And => Node::BinopAnd(left, right),
+                TokenType::Or => Node::BinopOr(left, right),
                 _ => unreachable!(),
             };
 
@@ -605,16 +620,26 @@ impl Parser {
 
     // Parse atomic expressions (unary operators and primary expressions)
     fn parse_atom(&mut self) -> ParseResult<NodeRef> {
-        if self.current_token.token_type == TokenType::Minus {
-            let start_token_index = self.token_index;
-            self.advance();
-            let operand = self.parse_atom()?; // Right-associative for multiple negations
-            let neg_node = Node::UnopNeg(operand);
-            Ok(self
-                .ast
-                .add_node(neg_node, NodeInfo::new(start_token_index)))
-        } else {
-            self.parse_primary()
+        match self.current_token.token_type {
+            TokenType::Minus => {
+                let start_token_index = self.token_index;
+                self.advance();
+                let operand = self.parse_atom()?; // Right-associative for multiple negations
+                let neg_node = Node::UnopNeg(operand);
+                Ok(self
+                    .ast
+                    .add_node(neg_node, NodeInfo::new(start_token_index)))
+            }
+            TokenType::Not => {
+                let start_token_index = self.token_index;
+                self.advance();
+                let operand = self.parse_atom()?; // Right-associative for multiple negations
+                let not_node = Node::UnopNot(operand);
+                Ok(self
+                    .ast
+                    .add_node(not_node, NodeInfo::new(start_token_index)))
+            }
+            _ => self.parse_primary()
         }
     }
 
@@ -884,8 +909,38 @@ mod tests {
 
     #[test]
     fn test_comparison_operators() {
+        // Equality operators
         roundtrip("fn main() -> bool { return true == false; }");
         roundtrip("fn main() { let x = 10; return x != 5; }");
+        
+        // Relational operators
+        roundtrip("fn main() -> bool { return 5 < 10; }");
+        roundtrip("fn main() -> bool { return 10 > 5; }");
+        roundtrip("fn main() -> bool { return 5 <= 10; }");
+        roundtrip("fn main() -> bool { return 10 >= 5; }");
+        roundtrip("fn main() -> bool { return 5 <= 5; }");
+        roundtrip("fn main() -> bool { return 5 >= 5; }");
+        
+        // Mixed comparisons
+        roundtrip("fn main() { let x = 10; let y = 20; return x < y && y > x; }");
+    }
+
+    #[test]
+    fn test_boolean_operators() {
+        // Basic boolean operators
+        roundtrip("fn main() -> bool { return true && false; }");
+        roundtrip("fn main() -> bool { return true || false; }");
+        roundtrip("fn main() -> bool { return !true; }");
+        roundtrip("fn main() -> bool { return !false; }");
+
+        // Multiple unary not operators
+        roundtrip("fn main() -> bool { return !!true; }");
+        roundtrip("fn main() -> bool { return !!!false; }");
+
+        // Mixed boolean and comparison operators
+        roundtrip("fn main() -> bool { return true && 1 == 1; }");
+        roundtrip("fn main() -> bool { return false || 2 != 3; }");
+        roundtrip("fn main() -> bool { return !(1 == 2); }");
     }
 
     #[test]
@@ -988,6 +1043,37 @@ mod tests {
     }
 
     #[test]
+    fn test_boolean_operator_precedence() {
+        // Test boolean operator precedence: || < && < == < arithmetic
+        // Natural precedence should not require parentheses
+        roundtrip("fn main() -> bool { return true || false && true; }");
+        roundtrip("fn main() -> bool { return true && false == false; }");
+        roundtrip("fn main() -> bool { return true && 1 + 2 == 3; }");
+        
+        // Test explicit parentheses are preserved when they override precedence
+        roundtrip("fn main() -> bool { return (true || false) && true; }");
+        // This case has redundant parentheses that get normalized away
+        parse_prints_as("fn main() -> bool { return true || (false && true); }", "fn main() -> bool { return true || false && true; }");
+        
+        // Test unary not has highest precedence - no parentheses needed
+        roundtrip("fn main() -> bool { return !true && false; }");
+        roundtrip("fn main() -> bool { return !1 == 2; }");
+    }
+
+    #[test]
+    fn test_comparison_operator_precedence() {
+        // Test comparison operator precedence with arithmetic
+        roundtrip("fn main() -> bool { return 1 + 2 < 5 - 1; }");
+        roundtrip("fn main() -> bool { return 2 * 3 > 4 + 1; }");
+        roundtrip("fn main() -> bool { return 10 / 2 <= 3 + 2; }");
+        roundtrip("fn main() -> bool { return 4 - 1 >= 2 * 1; }");
+        
+        // Test comparison with boolean operators
+        roundtrip("fn main() -> bool { return 1 < 2 && 3 > 2; }");
+        roundtrip("fn main() -> bool { return 5 == 5 || 10 != 5; }");
+    }
+
+    #[test]
     fn test_boolean_literals() {
         roundtrip("fn main() -> bool { return true; }");
         roundtrip("fn main() -> bool { return false; }");
@@ -1085,5 +1171,35 @@ mod tests {
         // Test that static parsing works even with comments between tokens
         roundtrip("fn main() { static let x = 42; }");
         roundtrip("fn main() { static const y = true; }");
+    }
+
+    #[test]
+    fn test_module_single_function() {
+        // Test that a single function is parsed as a module containing that function
+        roundtrip("fn main() { let x = 42; }");
+    }
+
+    #[test]
+    fn test_module_multiple_functions() {
+        // Test module with multiple function definitions
+        roundtrip("fn main() { let x = 42; }\n\nfn helper() -> bool { true }");
+    }
+
+    #[test]
+    fn test_module_const_only() {
+        // Test module with just a constant
+        roundtrip("const PI = 42;");
+    }
+
+    #[test]
+    fn test_module_const_and_function() {
+        // Test module with constant and function definitions
+        roundtrip("const PI = 42; fn main() { let x = PI; }");
+    }
+
+    #[test]
+    fn test_module_static_const_and_function() {
+        // Test module with static constant and function
+        roundtrip("const MAX_SIZE = 100; fn calculate() -> i32 { MAX_SIZE }");
     }
 }

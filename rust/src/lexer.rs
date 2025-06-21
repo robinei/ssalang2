@@ -33,6 +33,15 @@ pub enum TokenType {
     Equal,    // ==
     NotEqual, // !=
     Assign,   // =
+    And,      // &&
+    Or,       // ||
+    Not,      // !
+    BitAnd,   // &
+    BitOr,    // |
+    Lt,       // <
+    Gt,       // >
+    LtEq,     // <=
+    GtEq,     // >=
 
     // Punctuation
     LeftParen,  // (
@@ -319,6 +328,26 @@ impl<'a> Lexer<'a> {
                 Token::new(TokenType::Star, start_pos, 1)
             }
 
+            '&' => {
+                self.advance();
+                if self.current_char == '&' {
+                    self.advance();
+                    Token::new(TokenType::And, start_pos, 2)
+                } else {
+                    Token::new(TokenType::BitAnd, start_pos, 1)
+                }
+            }
+
+            '|' => {
+                self.advance();
+                if self.current_char == '|' {
+                    self.advance();
+                    Token::new(TokenType::Or, start_pos, 2)
+                } else {
+                    Token::new(TokenType::BitOr, start_pos, 1)
+                }
+            }
+
             '/' if self.peek() != '/' => {
                 self.advance();
                 Token::new(TokenType::Slash, start_pos, 1)
@@ -340,7 +369,7 @@ impl<'a> Lexer<'a> {
                     self.advance();
                     Token::new(TokenType::NotEqual, start_pos, 2)
                 } else {
-                    panic!("Unexpected character '!' at position {}", self.position);
+                    Token::new(TokenType::Not, start_pos, 1)
                 }
             }
 
@@ -387,6 +416,26 @@ impl<'a> Lexer<'a> {
             ':' => {
                 self.advance();
                 Token::new(TokenType::Colon, start_pos, 1)
+            }
+
+            '<' => {
+                self.advance();
+                if self.current_char == '=' {
+                    self.advance();
+                    Token::new(TokenType::LtEq, start_pos, 2)
+                } else {
+                    Token::new(TokenType::Lt, start_pos, 1)
+                }
+            }
+
+            '>' => {
+                self.advance();
+                if self.current_char == '=' {
+                    self.advance();
+                    Token::new(TokenType::GtEq, start_pos, 2)
+                } else {
+                    Token::new(TokenType::Gt, start_pos, 1)
+                }
             }
 
             ch => {
@@ -445,7 +494,7 @@ mod tests {
 
     #[test]
     fn test_operators() {
-        let mut lexer = Lexer::new("+ - * / == != = ->");
+        let mut lexer = Lexer::new("+ - * / == != = -> & | && || ! < > <= >=");
         let tokens = lexer.tokenize();
 
         assert_eq!(tokens[0].token_type, TokenType::Plus);
@@ -456,6 +505,71 @@ mod tests {
         assert_eq!(tokens[5].token_type, TokenType::NotEqual);
         assert_eq!(tokens[6].token_type, TokenType::Assign);
         assert_eq!(tokens[7].token_type, TokenType::Arrow);
+        assert_eq!(tokens[8].token_type, TokenType::BitAnd);
+        assert_eq!(tokens[9].token_type, TokenType::BitOr);
+        assert_eq!(tokens[10].token_type, TokenType::And);
+        assert_eq!(tokens[11].token_type, TokenType::Or);
+        assert_eq!(tokens[12].token_type, TokenType::Not);
+        assert_eq!(tokens[13].token_type, TokenType::Lt);
+        assert_eq!(tokens[14].token_type, TokenType::Gt);
+        assert_eq!(tokens[15].token_type, TokenType::LtEq);
+        assert_eq!(tokens[16].token_type, TokenType::GtEq);
+        assert_eq!(tokens[17].token_type, TokenType::Eof);
+    }
+
+    #[test]
+    fn test_boolean_operators() {
+        let mut lexer = Lexer::new("&& || ! != ==");
+        let tokens = lexer.tokenize();
+
+        assert_eq!(tokens[0].token_type, TokenType::And);
+        assert_eq!(tokens[1].token_type, TokenType::Or);
+        assert_eq!(tokens[2].token_type, TokenType::Not);
+        assert_eq!(tokens[3].token_type, TokenType::NotEqual);
+        assert_eq!(tokens[4].token_type, TokenType::Equal);
+        assert_eq!(tokens[5].token_type, TokenType::Eof);
+    }
+
+    #[test]
+    fn test_bitwise_operators() {
+        let mut lexer = Lexer::new("& | && ||");
+        let tokens = lexer.tokenize();
+
+        assert_eq!(tokens[0].token_type, TokenType::BitAnd);
+        assert_eq!(tokens[1].token_type, TokenType::BitOr);
+        assert_eq!(tokens[2].token_type, TokenType::And);
+        assert_eq!(tokens[3].token_type, TokenType::Or);
+        assert_eq!(tokens[4].token_type, TokenType::Eof);
+    }
+
+    #[test]
+    fn test_mixed_bitwise_and_logical() {
+        let mut lexer = Lexer::new("& && | || &| |&");
+        let tokens = lexer.tokenize();
+
+        assert_eq!(tokens[0].token_type, TokenType::BitAnd);
+        assert_eq!(tokens[1].token_type, TokenType::And);
+        assert_eq!(tokens[2].token_type, TokenType::BitOr);
+        assert_eq!(tokens[3].token_type, TokenType::Or);
+        assert_eq!(tokens[4].token_type, TokenType::BitAnd);
+        assert_eq!(tokens[5].token_type, TokenType::BitOr);
+        assert_eq!(tokens[6].token_type, TokenType::BitOr);
+        assert_eq!(tokens[7].token_type, TokenType::BitAnd);
+        assert_eq!(tokens[8].token_type, TokenType::Eof);
+    }
+
+    #[test]
+    fn test_comparison_operators() {
+        let mut lexer = Lexer::new("< > <= >= == !=");
+        let tokens = lexer.tokenize();
+
+        assert_eq!(tokens[0].token_type, TokenType::Lt);
+        assert_eq!(tokens[1].token_type, TokenType::Gt);
+        assert_eq!(tokens[2].token_type, TokenType::LtEq);
+        assert_eq!(tokens[3].token_type, TokenType::GtEq);
+        assert_eq!(tokens[4].token_type, TokenType::Equal);
+        assert_eq!(tokens[5].token_type, TokenType::NotEqual);
+        assert_eq!(tokens[6].token_type, TokenType::Eof);
     }
 
     #[test]

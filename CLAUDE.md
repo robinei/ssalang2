@@ -7,8 +7,21 @@ Assume that we will not be modifying any C code, or in any way needing to run th
 ## Rust version
 The `rust` subfolder contains the Rust version, which we are porting from the C version.
 
+I want to focus on creating a compiler which is very efficient in terms of cache friendly data structures and just general throughput.
+With this as a base I want to leverage an SSA IR to implement some basic optimizations.
+
+There main components are:
+* lexer.rs: The lexical analyzer.
+* ast.rs: Definition of the AST structure. A single AST is meant to represent a single module / file.
+* parse.rs: The AST parser, which consumes tokens from the lexer, and produces an AST. I want the AST produced to be efficient in terms of interpretation / compilation, requiring few or no dynamic lookups. At the same time I want it to fully support virtually lossless pretty printing (enough to implement the built-in code formatter).
+* ir.rs: Definition of the SSA intermediate representation (IR).
+* code.rs: Buffer for holding IR. Uses two vectors internally to implement buffer growable in both positive and negative directions. Negative indexes are used to store constant and pure instructions (they are unoredered, and we can schedule them later). Positive index instructions have an explicit scedule (given by their ordering).
+* compile.rs: (not written yet): Generates IR from the AST.
+* print.rs: The pretty printer, used both for pretty printing synthesized AST trees (potentially), as well as for formatting parsed ASTs (then making use of formatting tokens from the input token stream).
+* refmap.rs: Array storage for indexing by the Ref-types that we use. Guarantees that the zeroth index is always unused, and allows lazy expansion with default-construction when mut-indexing.
+
 ## C version
-The root directory contains the original C implementation.
+The root directory contains the original C implementation. This is legacy code, which we only use for reference.
 
 ### Building
 Run `make` here in the roor repo directory to build the project.

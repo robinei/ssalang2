@@ -61,12 +61,12 @@ impl LocalsRef {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct StatementsRef {
+pub struct NodesRef {
     pub offset: u16,
     pub count: u16,
 }
 
-impl StatementsRef {
+impl NodesRef {
     pub fn new(offset: u16, count: u16) -> Self {
         Self { offset, count }
     }
@@ -139,6 +139,7 @@ pub enum Node {
 
     // Unary operation nodes
     UnopNeg(NodeRef), // operand
+    UnopNot(NodeRef), // operand
 
     // Binary operation nodes
     BinopAdd(NodeRef, NodeRef), // left, right
@@ -147,13 +148,19 @@ pub enum Node {
     BinopDiv(NodeRef, NodeRef), // left, right
     BinopEq(NodeRef, NodeRef),  // left, right
     BinopNeq(NodeRef, NodeRef), // left, right
+    BinopLt(NodeRef, NodeRef),  // left, right
+    BinopGt(NodeRef, NodeRef),  // left, right
+    BinopLtEq(NodeRef, NodeRef), // left, right
+    BinopGtEq(NodeRef, NodeRef), // left, right
+    BinopAnd(NodeRef, NodeRef), // left, right
+    BinopOr(NodeRef, NodeRef),  // left, right
 
     // Local variable nodes
     LocalWrite(bool, LocalIndex, NodeRef), // is_definition, local_index, expr
     LocalRead(LocalIndex),                 // local_index
 
     // Control flow nodes
-    Block(Flags, ScopeIndex, StatementsRef), // flags, scope_index, statements
+    Block(Flags, ScopeIndex, NodesRef), // flags, scope_index, nodes
     If(Flags, NodeRef, NodeRef, NodeRef),    // flags, cond, then, els
     While(Flags, NodeRef, NodeRef),          // flags, cond, body
 
@@ -163,7 +170,10 @@ pub enum Node {
     Return(NodeRef),                   // value_node
 
     // Function node
-    Func(Flags, LocalsRef, NodeRef, NodeRef), // flags, locals_ref, body, return_type
+    Func(Flags, LocalsRef, NodeRef, NodeRef), // flags, parameters, body, return_type
+
+    // Module node
+    Module(NodesRef), // nodes
 }
 
 // Per-node metadata stored alongside AST nodes
@@ -193,7 +203,7 @@ pub struct Ast {
     nodes: Vec<Node>,                                         // All AST nodes
     node_info: Vec<NodeInfo>, // Per-node metadata (source location, etc.)
     locals: Vec<Local>,       // Flat array of all locals across all functions
-    statements: Vec<NodeRef>, // Flat array of all statements in blocks
+    node_refs: Vec<NodeRef>, // Flat array of all node references in blocks and modules
     strings: Vec<String>,     // String storage for string literals
     symbols: Vec<String>,     // Symbol storage for identifiers (interned)
     symbol_map: std::collections::HashMap<String, SymbolRef>, // For symbol interning
@@ -206,7 +216,7 @@ impl Ast {
             nodes: Vec::new(),
             node_info: Vec::new(),
             locals: Vec::new(),
-            statements: Vec::new(),
+            node_refs: Vec::new(),
             strings: Vec::new(),
             symbols: Vec::new(),
             symbol_map: std::collections::HashMap::new(),
@@ -269,18 +279,18 @@ impl Ast {
         self.get_symbol(local.name)
     }
 
-    // Statement storage methods
-    pub fn add_statements(&mut self, statements: &[NodeRef]) -> StatementsRef {
-        let offset = self.statements.len() as u16;
-        let count = statements.len() as u16;
-        self.statements.extend_from_slice(statements);
-        StatementsRef::new(offset, count)
+    // Node reference storage methods
+    pub fn add_node_refs(&mut self, node_refs: &[NodeRef]) -> NodesRef {
+        let offset = self.node_refs.len() as u16;
+        let count = node_refs.len() as u16;
+        self.node_refs.extend_from_slice(node_refs);
+        NodesRef::new(offset, count)
     }
 
-    pub fn get_statements(&self, statements_ref: StatementsRef) -> &[NodeRef] {
-        let start = statements_ref.offset as usize;
-        let end = start + (statements_ref.count as usize);
-        &self.statements[start..end]
+    pub fn get_node_refs(&self, nodes_ref: NodesRef) -> &[NodeRef] {
+        let start = nodes_ref.offset as usize;
+        let end = start + (nodes_ref.count as usize);
+        &self.node_refs[start..end]
     }
 
     // String storage methods (for string literals)

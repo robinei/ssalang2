@@ -229,9 +229,10 @@ impl<'a> PrettyPrinter<'a> {
                 self.buffer.push('"');
             }
             // Operators are handled by print_expression
-            Node::UnopNeg(_) | Node::BinopAdd(_, _) | Node::BinopSub(_, _) | 
+            Node::UnopNeg(_) | Node::UnopNot(_) | Node::BinopAdd(_, _) | Node::BinopSub(_, _) | 
             Node::BinopMul(_, _) | Node::BinopDiv(_, _) | Node::BinopEq(_, _) | 
-            Node::BinopNeq(_, _) => {
+            Node::BinopNeq(_, _) | Node::BinopLt(_, _) | Node::BinopGt(_, _) |
+            Node::BinopLtEq(_, _) | Node::BinopGtEq(_, _) | Node::BinopAnd(_, _) | Node::BinopOr(_, _) => {
                 self.print_expression(node_ref);
             }
             Node::LocalWrite(is_definition, local_index, expr) => {
@@ -250,6 +251,7 @@ impl<'a> PrettyPrinter<'a> {
                     self.emit_token(TokenType::Identifier, var_name);
                     self.emit_token(TokenType::Assign, " = ");
                     self.print_expression(*expr);
+                    self.emit_token(TokenType::Semicolon, ";");
                 } else {
                     // This is an assignment
                     self.emit_token(TokenType::Identifier, var_name);
@@ -261,7 +263,7 @@ impl<'a> PrettyPrinter<'a> {
                 let var_name = self.ast.get_local_name(*local_index);
                 self.emit_token(TokenType::Identifier, var_name);
             }
-            Node::Block(flags, _scope_index, statements_ref) => {
+            Node::Block(flags, _scope_index, nodes_ref) => {
                 if flags.is_static() {
                     self.emit_token(TokenType::Static, "static ");
                 }
@@ -269,24 +271,23 @@ impl<'a> PrettyPrinter<'a> {
                     self.emit_token(TokenType::Inline, "inline ");
                 }
 
-                let statements = self.ast.get_statements(*statements_ref);
+                let nodes = self.ast.get_node_refs(*nodes_ref);
 
-                if statements.is_empty() || statements.len() == 1 && self.is_unit_value(statements[0]) {
+                if nodes.is_empty() || nodes.len() == 1 && self.is_unit_value(nodes[0]) {
                     self.emit_token(TokenType::LeftBrace, "{ ");
                     self.emit_token(TokenType::RightBrace, "}");
                 } else {
                     self.emit_token(TokenType::LeftBrace, "{");
                     self.write_newline();
                     self.indent += 1;
-                    for (i, &statement) in statements.iter().enumerate() {
-                        if i == statements.len() - 1 {
-                            if !self.is_unit_value(statement) {
-                                self.print_node(statement);
+                    for (i, &node) in nodes.iter().enumerate() {
+                        if i == nodes.len() - 1 {
+                            if !self.is_unit_value(node) {
+                                self.print_node(node);
                                 self.write_newline();
                             }
                         } else {
-                            self.print_node(statement);
-                            self.emit_token(TokenType::Semicolon, ";");
+                            self.print_node(node);
                             self.write_newline();
                         }
                     }
@@ -338,22 +339,27 @@ impl<'a> PrettyPrinter<'a> {
             Node::Break(_flags, _scope_index, value) => {
                 if self.is_unit_value(*value) {
                     self.emit_token(TokenType::Break, "break");
+                    self.emit_token(TokenType::Semicolon, ";");
                 } else {
                     self.emit_token(TokenType::Break, "break ");
                     self.print_expression(*value);
+                    self.emit_token(TokenType::Semicolon, ";");
                 }
             }
             Node::Continue(_flags, _scope_index, value) => {
                 if self.is_unit_value(*value) {
                     self.emit_token(TokenType::Continue, "continue");
+                    self.emit_token(TokenType::Semicolon, ";");
                 } else {
                     self.emit_token(TokenType::Continue, "continue ");
                     self.print_expression(*value);
+                    self.emit_token(TokenType::Semicolon, ";");
                 }
             }
             Node::Return(value) => {
                 self.emit_token(TokenType::Return, "return ");
                 self.print_expression(*value);
+                self.emit_token(TokenType::Semicolon, ";");
             }
             Node::Func(flags, locals_ref, body, return_type) => {
                 if flags.is_static() {
@@ -368,14 +374,9 @@ impl<'a> PrettyPrinter<'a> {
                 self.emit_token(TokenType::LeftParen, "(");
 
                 // Print parameters
-                let locals = self.ast.get_locals(*locals_ref);
-                let params: Vec<_> = locals
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, local)| local.is_param)
-                    .collect();
+                let params = self.ast.get_locals(*locals_ref);
 
-                for (i, (_local_idx, local)) in params.iter().enumerate() {
+                for (i, local) in params.iter().enumerate() {
                     if i > 0 {
                         self.emit_token(TokenType::Comma, ", ");
                     }
@@ -404,6 +405,15 @@ impl<'a> PrettyPrinter<'a> {
                 // Print function body (always a Block)
                 self.print_node(*body);
             }
+            Node::Module(nodes_ref) => {
+                let nodes = self.ast.get_node_refs(*nodes_ref);
+                for (i, &node) in nodes.iter().enumerate() {
+                    if i > 0 {
+                        self.write_newline();
+                    }
+                    self.print_node(node);
+                }
+            }
         }
     }
 
@@ -417,7 +427,6 @@ impl<'a> PrettyPrinter<'a> {
 
         // Add parentheses if current precedence is lower than parent precedence
         let needs_parens = current_precedence > 0 && current_precedence < parent_precedence;
-
         if needs_parens {
             self.emit_token(TokenType::LeftParen, "(");
         }
@@ -453,9 +462,43 @@ impl<'a> PrettyPrinter<'a> {
                 self.emit_token(TokenType::NotEqual, " != ");
                 self.print_expression_with_precedence(*right, current_precedence + 1);
             }
+            Node::BinopLt(left, right) => {
+                self.print_expression_with_precedence(*left, current_precedence);
+                self.emit_token(TokenType::Lt, " < ");
+                self.print_expression_with_precedence(*right, current_precedence + 1);
+            }
+            Node::BinopGt(left, right) => {
+                self.print_expression_with_precedence(*left, current_precedence);
+                self.emit_token(TokenType::Gt, " > ");
+                self.print_expression_with_precedence(*right, current_precedence + 1);
+            }
+            Node::BinopLtEq(left, right) => {
+                self.print_expression_with_precedence(*left, current_precedence);
+                self.emit_token(TokenType::LtEq, " <= ");
+                self.print_expression_with_precedence(*right, current_precedence + 1);
+            }
+            Node::BinopGtEq(left, right) => {
+                self.print_expression_with_precedence(*left, current_precedence);
+                self.emit_token(TokenType::GtEq, " >= ");
+                self.print_expression_with_precedence(*right, current_precedence + 1);
+            }
             Node::UnopNeg(operand) => {
                 self.emit_token(TokenType::Minus, "-");
                 self.print_expression_with_precedence(*operand, current_precedence);
+            }
+            Node::UnopNot(operand) => {
+                self.emit_token(TokenType::Not, "!");
+                self.print_expression_with_precedence(*operand, current_precedence);
+            }
+            Node::BinopAnd(left, right) => {
+                self.print_expression_with_precedence(*left, current_precedence);
+                self.emit_token(TokenType::And, " && ");
+                self.print_expression_with_precedence(*right, current_precedence + 1);
+            }
+            Node::BinopOr(left, right) => {
+                self.print_expression_with_precedence(*left, current_precedence);
+                self.emit_token(TokenType::Or, " || ");
+                self.print_expression_with_precedence(*right, current_precedence + 1);
             }
             _ => {
                 // For non-expression nodes, just print normally
@@ -470,10 +513,14 @@ impl<'a> PrettyPrinter<'a> {
 
     fn get_node_precedence(&self, node: &Node) -> i32 {
         match node {
-            Node::BinopEq(_, _) | Node::BinopNeq(_, _) => 1, // Equality: lowest precedence
-            Node::BinopAdd(_, _) | Node::BinopSub(_, _) => 2, // Addition/subtraction
-            Node::BinopMul(_, _) | Node::BinopDiv(_, _) => 3, // Multiplication/division: highest precedence
-            Node::UnopNeg(_) => 4,                            // Unary operators: highest precedence
+            Node::BinopOr(_, _) => 1,                         // Logical OR: lowest precedence
+            Node::BinopAnd(_, _) => 2,                        // Logical AND
+            Node::BinopEq(_, _) | Node::BinopNeq(_, _) |
+            Node::BinopLt(_, _) | Node::BinopGt(_, _) |
+            Node::BinopLtEq(_, _) | Node::BinopGtEq(_, _) => 3, // Equality and comparison
+            Node::BinopAdd(_, _) | Node::BinopSub(_, _) => 4, // Addition/subtraction
+            Node::BinopMul(_, _) | Node::BinopDiv(_, _) => 5, // Multiplication/division
+            Node::UnopNeg(_) | Node::UnopNot(_) => 6,         // Unary operators: highest precedence
             _ => 0,                                           // Non-operators don't have precedence
         }
     }
@@ -525,13 +572,13 @@ impl<'a> PrettyPrinter<'a> {
 
     fn is_empty_or_unit_only_block(&self, node_ref: NodeRef) -> bool {
         // Check if this is a Block with no statements or only unit value
-        if let Node::Block(_, _, statements_ref) = self.ast.get_node(node_ref) {
-            if statements_ref.count == 0 {
+        if let Node::Block(_, _, nodes_ref) = self.ast.get_node(node_ref) {
+            if nodes_ref.count == 0 {
                 return true;
             }
-            if statements_ref.count == 1 {
-                let statements = self.ast.get_statements(*statements_ref);
-                return self.is_unit_value(statements[0]);
+            if nodes_ref.count == 1 {
+                let nodes = self.ast.get_node_refs(*nodes_ref);
+                return self.is_unit_value(nodes[0]);
             }
         }
         false
@@ -640,6 +687,64 @@ fn main() {
     if x == 42 {
         return true; // Success
     }
+}"#);
+    }
+
+    #[test]
+    fn test_boolean_operators_formatting() {
+        // Test basic boolean operators
+        reformat_prints_as(r#"fn main() {
+    let a = true && false;
+    let b = true || false;
+    let c = !true;
+    return a;
+}"#, r#"fn main() {
+    let a = true && false;
+    let b = true || false;
+    let c = !true;
+    return a;
+}"#);
+    }
+
+    #[test]
+    fn test_boolean_operator_precedence_formatting() {
+        // Test precedence with proper parentheses
+        reformat_prints_as(r#"fn main() {
+    let result = !true && false || true == false;
+    return result;
+}"#, r#"fn main() {
+    let result = !true && false || true == false;
+    return result;
+}"#);
+    }
+
+    #[test]
+    fn test_comparison_operators_formatting() {
+        // Test basic comparison operators
+        reformat_prints_as(r#"fn main() {
+    let a = 5 < 10;
+    let b = 10 > 5;
+    let c = 5 <= 10;
+    let d = 10 >= 5;
+    return a;
+}"#, r#"fn main() {
+    let a = 5 < 10;
+    let b = 10 > 5;
+    let c = 5 <= 10;
+    let d = 10 >= 5;
+    return a;
+}"#);
+    }
+
+    #[test]
+    fn test_mixed_operators_formatting() {
+        // Test mixed arithmetic, comparison, and boolean operators
+        reformat_prints_as(r#"fn main() {
+    let result = 1 + 2 < 5 && 10 >= 3 * 2 || false;
+    return result;
+}"#, r#"fn main() {
+    let result = 1 + 2 < 5 && 10 >= 3 * 2 || false;
+    return result;
 }"#);
     }
 }
