@@ -45,8 +45,8 @@ pub enum TokenType {
     Arrow,      // ->
 
     // Formatting tokens
-    Comment, // //
-    Newline, // \n
+    Comment,   // //
+    EmptyLine, // \n (empty line)
 
     // Special
     Eof,
@@ -177,6 +177,31 @@ impl<'a> Lexer<'a> {
         (self.position - start_pos) as u32
     }
 
+    fn is_current_line_empty(&self) -> bool {
+        // Look backwards from current position to find the start of the current line
+        let mut pos = self.position;
+        
+        // Go back to the start of the current line (or start of file)
+        while pos > 0 {
+            let prev_char = self.input.chars().nth(pos - 1).unwrap_or('\0');
+            if prev_char == '\n' {
+                break; // Found the start of current line
+            }
+            pos -= 1;
+        }
+        
+        // Now check if everything from pos to current position is whitespace
+        while pos < self.position {
+            let ch = self.input.chars().nth(pos).unwrap_or('\0');
+            if !ch.is_whitespace() || ch == '\n' {
+                return false; // Found non-whitespace content
+            }
+            pos += 1;
+        }
+        
+        true // Current line contains only whitespace
+    }
+
     fn keyword_or_identifier(&self, start_pos: usize, length: usize) -> TokenType {
         if start_pos + length > self.input.len() {
             return TokenType::Identifier;
@@ -246,8 +271,15 @@ impl<'a> Lexer<'a> {
             '\0' => Token::new(TokenType::Eof, start_pos, 0),
 
             '\n' => {
-                self.advance();
-                Token::new(TokenType::Newline, start_pos, 1)
+                // Look back to see if the current line was actually empty
+                if self.is_current_line_empty() {
+                    self.advance(); // Skip the newline
+                    Token::new(TokenType::EmptyLine, start_pos, 1)
+                } else {
+                    // Just a structural newline, skip it and get next token
+                    self.advance();
+                    self.next_token()
+                }
             }
 
             '/' if self.peek() == '/' => {

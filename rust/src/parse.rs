@@ -66,7 +66,7 @@ impl Parser {
             self.current_token = self.tokens[self.token_index];
             if !matches!(
                 self.current_token.token_type,
-                TokenType::Comment | TokenType::Newline
+                TokenType::Comment | TokenType::EmptyLine
             ) {
                 return; // accept semantic token
             }
@@ -93,7 +93,7 @@ impl Parser {
 
         while peek_index < self.tokens.len() {
             let token = &self.tokens[peek_index];
-            if !matches!(token.token_type, TokenType::Comment | TokenType::Newline) {
+            if !matches!(token.token_type, TokenType::Comment | TokenType::EmptyLine) {
                 if semantic_count == n {
                     return token.token_type;
                 }
@@ -838,7 +838,7 @@ mod tests {
     fn roundtrip(input: &str) {
         // NEVER fix tests by changing this function - fix the implementations that we are testing
         let ast = Parser::parse(input).unwrap();
-        let printer = PrettyPrinter::new(&ast);
+        let printer = PrettyPrinter::new_generate(&ast, 0);
         let output = printer.print();
         assert_eq!(input, output);
     }
@@ -846,7 +846,7 @@ mod tests {
     fn parse_prints_as(input: &str, expected_output: &str) {
         // Test cases where input parses correctly but prints in normalized form
         let ast = Parser::parse(input).unwrap();
-        let printer = PrettyPrinter::new(&ast);
+        let printer = PrettyPrinter::new_generate(&ast, 0);
         let output = printer.print();
         assert_eq!(expected_output, output);
     }

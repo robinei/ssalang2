@@ -1,50 +1,230 @@
-use crate::ast::{Ast, Node, NodeRef, TypeAtom};
+use crate::{ast::{Ast, Node, NodeRef, TypeAtom}, lexer::{Token, TokenType}};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PrintMode {
+    Reformat,    // Preserve original formatting tokens
+    Generate,    // Clean generation, no formatting tokens
+}
 
 pub struct PrettyPrinter<'a> {
     ast: &'a Ast,
-    buffer: String,
+    mode: PrintMode,
+    tokens: Option<&'a [Token]>,
+    source: Option<&'a str>,
+    token_index: usize,
     indent_size: usize,
+    indent: usize,
+    buffer: String,
 }
 
 impl<'a> PrettyPrinter<'a> {
-    pub fn new(ast: &'a Ast) -> Self {
-        Self::with_indent(ast, 0) // Default to single-line (0 indent)
-    }
-
-    pub fn with_indent(ast: &'a Ast, indent_size: usize) -> Self {
+    pub fn new_reformat(ast: &'a Ast, tokens: &'a [Token], source: &'a str, indent_size: usize) -> Self {
         Self {
             ast,
-            buffer: String::with_capacity(1024), // Pre-allocate reasonable capacity
+            mode: PrintMode::Reformat,
+            tokens: Some(tokens),
+            source: Some(source),
+            token_index: 0,
             indent_size,
+            indent: 0,
+            buffer: String::with_capacity(1024),
+        }
+    }
+
+    pub fn new_generate(ast: &'a Ast, indent_size: usize) -> Self {
+        Self {
+            ast,
+            mode: PrintMode::Generate,
+            tokens: None,
+            source: None,
+            token_index: 0,
+            indent_size,
+            indent: 0,
+            buffer: String::with_capacity(1024),
         }
     }
 
     pub fn print(mut self) -> String {
+        self.indent = 0;
         self.buffer.clear();
+        self.token_index = 0;
         if let Some(root) = self.ast.get_root() {
-            self.print_node(root, 0);
+            self.print_node(root);
         }
+        // Catch any trailing formatting tokens
+        self.emit_token(TokenType::Eof, "");
         self.buffer
     }
 
-    fn write_indent(&mut self, level: usize) {
-        self.buffer.push_str(&" ".repeat(level * self.indent_size));
+    fn is_multiline(&self) -> bool {
+        self.indent_size > 0
+    }
+
+    fn write_indent(&mut self) {
+        if self.is_multiline() {
+            self.buffer.push_str(&" ".repeat(self.indent * self.indent_size));
+        }
     }
 
     fn write_newline(&mut self) {
-        self.buffer.push('\n');
+        if self.is_multiline() {
+            self.buffer.push('\n');
+        } else {
+            self.buffer.push(' ');
+        }
     }
 
+    fn emit_token(&mut self, token_type: TokenType, text: &str) {
+        if self.mode == PrintMode::Reformat {
+            // Process formatting tokens and sync with the token stream
+            while let Some(token) = self.tokens.map(|t| t.get(self.token_index)).flatten() {
+                match token.token_type {
+                    TokenType::Comment => {
+                        if self.is_inline_comment(token) {
+                            // Inline comment - break and handle after emitting semantic token
+                            break;
+                        } else {
+                            // Standalone comment - emit it on its own line
+                            if !(self.buffer.is_empty() || self.buffer.ends_with('\n')) {
+                                self.buffer.push('\n');
+                            }
+                            self.write_indent();
+                            self.buffer.push_str(&self.get_token_text(token).unwrap_or_default());
+                            self.buffer.push('\n');
+                        }
+                        self.token_index += 1;
+                    }
+                    TokenType::EmptyLine => {
+                        // Count consecutive empty lines and limit them
+                        let mut consecutive_empty_lines = 0;
+                        let start_index = self.token_index;
+                        
+                        // Count all consecutive EmptyLine tokens
+                        while let Some(empty_token) = self.tokens.map(|t| t.get(start_index + consecutive_empty_lines)).flatten() {
+                            if empty_token.token_type == TokenType::EmptyLine {
+                                consecutive_empty_lines += 1;
+                            } else {
+                                break;
+                            }
+                        }
+                        
+                        // Limit to max 2 consecutive blank lines
+                        let lines_to_emit = std::cmp::min(consecutive_empty_lines, 2);
+                        for _ in 0..lines_to_emit {
+                            self.buffer.push('\n');
+                        }
+                        
+                        // Advance past all the EmptyLine tokens we processed
+                        self.token_index += consecutive_empty_lines;
+                    }
+                    t if t == token_type => {
+                        // Found matching semantic token - we're in sync!
+                        self.token_index += 1;
+                        break;
+                    }
+                    TokenType::LeftParen | TokenType::RightParen => {
+                        // Skip parentheses as they might be dropped
+                        self.token_index += 1;
+                    }
+                    _ => {
+                        // Unexpected semantic token
+                        eprintln!("Warning: Expected {:?} but found {:?} at position {}", 
+                                 token_type, token.token_type, self.token_index);
+                        break; // Emit synthetic token anyway
+                    }
+                }
+            }
+            
+            // Apply indentation if we're at the start of a line
+            if self.buffer.is_empty() || self.buffer.ends_with('\n') {
+                self.write_indent();
+            }
+        }
+        
+        // Emit the token (unless it's EOF which is just for catching trailing formatting)
+        if token_type != TokenType::Eof {
+            self.buffer.push_str(text);
+        }
+        
+        if self.mode == PrintMode::Reformat {
+            // Process any inline comments that immediately follow this semantic token
+            if let Some(token) = self.tokens.map(|t| t.get(self.token_index)).flatten() {
+                if token.token_type == TokenType::Comment && self.is_inline_comment(token) {
+                    self.buffer.push(' ');
+                    self.buffer.push_str(&self.get_token_text(token).unwrap_or_default());
+                    self.token_index += 1;
+                }
+            }
+        }
+        
+    }
 
-    fn print_node(&mut self, node_ref: NodeRef, indent: usize) {
+    
+    
+    
+
+    fn is_inline_comment(&self, comment_token: &Token) -> bool {
+        if let Some(source) = self.source {
+            let comment_start = comment_token.start as usize;
+            
+            // Look backwards from comment start to see if there's non-whitespace on the same line
+            let mut pos = comment_start;
+            while pos > 0 {
+                pos -= 1;
+                match source.chars().nth(pos) {
+                    Some('\n') => {
+                        // Reached beginning of line without finding non-whitespace
+                        return false;
+                    }
+                    Some(ch) if !ch.is_whitespace() => {
+                        // Found non-whitespace on same line - this is inline
+                        return true;
+                    }
+                    _ => {
+                        // Continue looking backwards
+                        continue;
+                    }
+                }
+            }
+        }
+            false
+    }
+    
+    
+    fn get_token_text(&self, token: &Token) -> Option<String> {
+        if let Some(source) = self.source {
+            let start = token.start as usize;
+            let end = start + token.length as usize;
+            if end <= source.len() {
+                Some(source[start..end].to_string())
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
+
+    fn print_node(&mut self, node_ref: NodeRef) {
         let node = self.ast.get_node(node_ref);
         match node {
             Node::TypeAtom(atom) => self.write_type_atom(*atom),
-            Node::ConstUnit => self.buffer.push_str("()"),
-            Node::ConstBool(value) => self.buffer.push_str(&value.to_string()),
-            Node::ConstI32(value) => self.buffer.push_str(&value.to_string()),
+            Node::ConstUnit => {
+                self.emit_token(TokenType::LeftParen, "(");
+                self.emit_token(TokenType::RightParen, ")");
+            },
+            Node::ConstBool(value) => {
+                if *value {
+                    self.emit_token(TokenType::True, "true");
+                } else {
+                    self.emit_token(TokenType::False, "false");
+                }
+            },
+            Node::ConstI32(value) => {
+                self.emit_token(TokenType::IntLiteral, &value.to_string());
+            },
             Node::ConstString(string_ref) => {
-                self.buffer.push('"');
+                self.emit_token(TokenType::StringLiteral, "\"");
                 self.write_escaped_string(self.ast.get_string(*string_ref));
                 self.buffer.push('"');
             }
@@ -60,147 +240,132 @@ impl<'a> PrettyPrinter<'a> {
                     // This is a variable declaration (let or const)
                     let local = self.ast.get_local(*local_index);
                     if local.is_static {
-                        self.buffer.push_str("static ");
+                        self.emit_token(TokenType::Static, "static ");
                     }
                     if local.is_const {
-                        self.buffer.push_str("const ");
+                        self.emit_token(TokenType::Const, "const ");
                     } else {
-                        self.buffer.push_str("let ");
+                        self.emit_token(TokenType::Let, "let ");
                     }
-                    self.buffer.push_str(var_name);
-                    self.buffer.push_str(" = ");
+                    self.emit_token(TokenType::Identifier, var_name);
+                    self.emit_token(TokenType::Assign, " = ");
                     self.print_expression(*expr);
-                    self.buffer.push(';');
                 } else {
                     // This is an assignment
-                    self.buffer.push_str(var_name);
-                    self.buffer.push_str(" = ");
+                    self.emit_token(TokenType::Identifier, var_name);
+                    self.emit_token(TokenType::Assign, " = ");
                     self.print_expression(*expr);
-                    self.buffer.push(';');
                 }
             }
             Node::LocalRead(local_index) => {
                 let var_name = self.ast.get_local_name(*local_index);
-                self.buffer.push_str(var_name);
+                self.emit_token(TokenType::Identifier, var_name);
             }
             Node::Block(flags, _scope_index, statements_ref) => {
                 if flags.is_static() {
-                    self.buffer.push_str("static ");
+                    self.emit_token(TokenType::Static, "static ");
                 }
                 if flags.is_inline() {
-                    self.buffer.push_str("inline ");
+                    self.emit_token(TokenType::Inline, "inline ");
                 }
 
                 let statements = self.ast.get_statements(*statements_ref);
-                let mut printed_statements = Vec::new();
 
-                for (i, &statement) in statements.iter().enumerate() {
-                    // Always skip printing final ConstUnit (whether auto-generated or user-written)
-                    let is_last = i == statements.len() - 1;
-                    let is_final_unit = is_last && self.is_unit_value(statement);
-
-                    if !is_final_unit {
-                        printed_statements.push(statement);
-                    }
-                }
-
-                if printed_statements.is_empty() {
-                    self.buffer.push_str("{ }");
-                } else if self.indent_size > 0 {
-                    self.buffer.push('{');
-                    self.write_newline();
-                    for &statement in &printed_statements {
-                        self.write_indent(indent + 1);
-                        self.print_node(statement, indent + 1);
-                        self.write_newline();
-                    }
-                    self.write_indent(indent);
-                    self.buffer.push('}');
+                if statements.is_empty() || statements.len() == 1 && self.is_unit_value(statements[0]) {
+                    self.emit_token(TokenType::LeftBrace, "{ ");
+                    self.emit_token(TokenType::RightBrace, "}");
                 } else {
-                    // Original compact single-line format
-                    self.buffer.push_str("{ ");
-                    for (i, &statement) in printed_statements.iter().enumerate() {
-                        if i > 0 {
-                            self.buffer.push(' ');
+                    self.emit_token(TokenType::LeftBrace, "{");
+                    self.write_newline();
+                    self.indent += 1;
+                    for (i, &statement) in statements.iter().enumerate() {
+                        if i == statements.len() - 1 {
+                            if !self.is_unit_value(statement) {
+                                self.print_node(statement);
+                                self.write_newline();
+                            }
+                        } else {
+                            self.print_node(statement);
+                            self.emit_token(TokenType::Semicolon, ";");
+                            self.write_newline();
                         }
-                        self.print_node(statement, indent);
                     }
-                    self.buffer.push_str(" }");
+                    self.indent -= 1;
+                    self.emit_token(TokenType::RightBrace, "}");
                 }
             }
             Node::If(flags, cond, then_branch, else_branch) => {
                 if flags.is_static() {
-                    self.buffer.push_str("static ");
+                    self.emit_token(TokenType::Static, "static ");
                 }
                 if flags.is_inline() {
-                    self.buffer.push_str("inline ");
+                    self.emit_token(TokenType::Inline, "inline ");
                 }
 
-                self.buffer.push_str("if ");
+                self.emit_token(TokenType::If, "if ");
                 self.print_expression(*cond);
                 self.buffer.push(' ');
 
                 // Handle then branch (always a Block)
-                self.print_node(*then_branch, indent);
+                self.print_node(*then_branch);
 
                 // Handle else branch (Block or If node, but might be empty)
                 if self.is_block_node(*else_branch) {
                     if !self.is_empty_or_unit_only_block(*else_branch) {
-                        self.buffer.push_str(" else ");
-                        self.print_node(*else_branch, indent);
+                        self.emit_token(TokenType::Else, " else ");
+                        self.print_node(*else_branch);
                     }
                 } else if self.is_if_node(*else_branch) {
-                    self.buffer.push_str(" else ");
-                    self.print_node(*else_branch, indent);
+                    self.emit_token(TokenType::Else, " else ");
+                    self.print_node(*else_branch);
                 }
             }
             Node::While(flags, cond, body) => {
                 if flags.is_static() {
-                    self.buffer.push_str("static ");
+                    self.emit_token(TokenType::Static, "static ");
                 }
                 if flags.is_inline() {
-                    self.buffer.push_str("inline ");
+                    self.emit_token(TokenType::Inline, "inline ");
                 }
 
-                self.buffer.push_str("while ");
+                self.emit_token(TokenType::While, "while ");
                 self.print_expression(*cond);
                 self.buffer.push(' ');
 
                 // Handle body (always a Block)
-                self.print_node(*body, indent);
+                self.print_node(*body);
             }
             Node::Break(_flags, _scope_index, value) => {
                 if self.is_unit_value(*value) {
-                    self.buffer.push_str("break;");
+                    self.emit_token(TokenType::Break, "break");
                 } else {
-                    self.buffer.push_str("break ");
+                    self.emit_token(TokenType::Break, "break ");
                     self.print_expression(*value);
-                    self.buffer.push(';');
                 }
             }
             Node::Continue(_flags, _scope_index, value) => {
                 if self.is_unit_value(*value) {
-                    self.buffer.push_str("continue;");
+                    self.emit_token(TokenType::Continue, "continue");
                 } else {
-                    self.buffer.push_str("continue ");
+                    self.emit_token(TokenType::Continue, "continue ");
                     self.print_expression(*value);
-                    self.buffer.push(';');
                 }
             }
             Node::Return(value) => {
-                self.buffer.push_str("return ");
+                self.emit_token(TokenType::Return, "return ");
                 self.print_expression(*value);
-                self.buffer.push(';');
             }
             Node::Func(flags, locals_ref, body, return_type) => {
                 if flags.is_static() {
-                    self.buffer.push_str("static ");
+                    self.emit_token(TokenType::Static, "static ");
                 }
                 if flags.is_inline() {
-                    self.buffer.push_str("inline ");
+                    self.emit_token(TokenType::Inline, "inline ");
                 }
 
-                self.buffer.push_str("fn main(");
+                self.emit_token(TokenType::Fn, "fn ");
+                self.emit_token(TokenType::Identifier, "main");
+                self.emit_token(TokenType::LeftParen, "(");
 
                 // Print parameters
                 let locals = self.ast.get_locals(*locals_ref);
@@ -212,32 +377,32 @@ impl<'a> PrettyPrinter<'a> {
 
                 for (i, (_local_idx, local)) in params.iter().enumerate() {
                     if i > 0 {
-                        self.buffer.push_str(", ");
+                        self.emit_token(TokenType::Comma, ", ");
                     }
                     if local.is_static {
-                        self.buffer.push_str("static ");
+                        self.emit_token(TokenType::Static, "static ");
                     }
                     let param_name = self.ast.get_symbol(local.name);
-                    self.buffer.push_str(param_name);
-                    self.buffer.push_str(": ");
-                    self.print_node(local.ty, 0);
+                    self.emit_token(TokenType::Identifier, param_name);
+                    self.emit_token(TokenType::Colon, ": ");
+                    self.print_node(local.ty);
                 }
 
-                self.buffer.push_str(")");
+                self.emit_token(TokenType::RightParen, ")");
 
                 // Print return type if not unit
                 if !matches!(
                     self.ast.get_node(*return_type),
                     Node::TypeAtom(TypeAtom::Unit)
                 ) {
-                    self.buffer.push_str(" -> ");
-                    self.print_node(*return_type, 0);
+                    self.emit_token(TokenType::Arrow, " -> ");
+                    self.print_node(*return_type);
                 }
 
                 self.buffer.push(' ');
 
                 // Print function body (always a Block)
-                self.print_node(*body, indent);
+                self.print_node(*body);
             }
         }
     }
@@ -254,52 +419,52 @@ impl<'a> PrettyPrinter<'a> {
         let needs_parens = current_precedence > 0 && current_precedence < parent_precedence;
 
         if needs_parens {
-            self.buffer.push('(');
+            self.emit_token(TokenType::LeftParen, "(");
         }
 
         match node {
             Node::BinopAdd(left, right) => {
                 self.print_expression_with_precedence(*left, current_precedence);
-                self.buffer.push_str(" + ");
+                self.emit_token(TokenType::Plus, " + ");
                 self.print_expression_with_precedence(*right, current_precedence + 1);
             }
             Node::BinopSub(left, right) => {
                 self.print_expression_with_precedence(*left, current_precedence);
-                self.buffer.push_str(" - ");
+                self.emit_token(TokenType::Minus, " - ");
                 self.print_expression_with_precedence(*right, current_precedence + 1);
             }
             Node::BinopMul(left, right) => {
                 self.print_expression_with_precedence(*left, current_precedence);
-                self.buffer.push_str(" * ");
+                self.emit_token(TokenType::Star, " * ");
                 self.print_expression_with_precedence(*right, current_precedence + 1);
             }
             Node::BinopDiv(left, right) => {
                 self.print_expression_with_precedence(*left, current_precedence);
-                self.buffer.push_str(" / ");
+                self.emit_token(TokenType::Slash, " / ");
                 self.print_expression_with_precedence(*right, current_precedence + 1);
             }
             Node::BinopEq(left, right) => {
                 self.print_expression_with_precedence(*left, current_precedence);
-                self.buffer.push_str(" == ");
+                self.emit_token(TokenType::Equal, " == ");
                 self.print_expression_with_precedence(*right, current_precedence + 1);
             }
             Node::BinopNeq(left, right) => {
                 self.print_expression_with_precedence(*left, current_precedence);
-                self.buffer.push_str(" != ");
+                self.emit_token(TokenType::NotEqual, " != ");
                 self.print_expression_with_precedence(*right, current_precedence + 1);
             }
             Node::UnopNeg(operand) => {
-                self.buffer.push('-');
+                self.emit_token(TokenType::Minus, "-");
                 self.print_expression_with_precedence(*operand, current_precedence);
             }
             _ => {
                 // For non-expression nodes, just print normally
-                self.print_node(node_ref, 0);
+                self.print_node(node_ref);
             }
         }
 
         if needs_parens {
-            self.buffer.push(')');
+            self.emit_token(TokenType::RightParen, ")");
         }
     }
 
@@ -315,12 +480,17 @@ impl<'a> PrettyPrinter<'a> {
 
     fn write_type_atom(&mut self, atom: TypeAtom) {
         match atom {
-            TypeAtom::Unit => self.buffer.push_str("unit"),
-            TypeAtom::Bool => self.buffer.push_str("bool"),
-            TypeAtom::I32 => self.buffer.push_str("i32"),
+            TypeAtom::Unit => {
+                self.emit_token(TokenType::Unit, "unit");
+            },
+            TypeAtom::Bool => {
+                self.emit_token(TokenType::Bool, "bool");
+            },
+            TypeAtom::I32 => {
+                self.emit_token(TokenType::I32, "i32");
+            },
         }
     }
-
 
     fn write_escaped_string(&mut self, s: &str) {
         for ch in s.chars() {
@@ -378,20 +548,98 @@ mod tests {
     use super::*;
     use crate::parse::Parser;
 
+    // Test utility function for reformat mode  
+    fn reformat_prints_as(input: &str, expected_output: &str) {
+        let mut lexer = crate::lexer::Lexer::new(input);
+        let tokens = lexer.tokenize();
+        let ast = Parser::parse(input).unwrap();
+        let printer = PrettyPrinter::new_reformat(&ast, &tokens, input, 4);
+        let output = printer.print();
+        assert_eq!(expected_output, output);
+    }
+
     #[test]
-    fn test_multiline_indentation() {
-        let source = r#"fn main() { let x = 42; if x == 42 { return true; } else { return false; } }"#;
-        let ast = Parser::parse(source).unwrap();
-        
-        // Test single-line (default)
-        let printer = PrettyPrinter::new(&ast);
-        let single_line = printer.print();
-        assert_eq!(single_line, "fn main() { let x = 42; if x == 42 { return true; } else { return false; } }");
-        
-        // Test multi-line with 2-space indentation
-        let printer = PrettyPrinter::with_indent(&ast, 2);
-        let multi_line = printer.print();
-        let expected = "fn main() {\n  let x = 42;\n  if x == 42 {\n    return true;\n  } else {\n    return false;\n  }\n}";
-        assert_eq!(multi_line, expected);
+    fn test_basic_comment_preservation() {
+        // Test that comments are preserved (indentation is lost due to lexer not capturing it)
+        reformat_prints_as(r#"fn main() {
+    let x = 42; // Inline comment
+    return x;
+}"#, r#"fn main() {
+    let x = 42; // Inline comment
+    return x;
+}"#);
+    }
+
+    #[test]
+    fn test_inline_comment_detection() {
+        // Test that inline comments are properly handled with spacing normalization
+        reformat_prints_as(r#"fn main() {
+    let x = 42;// No space
+    let y = 24; // With space
+    return x + y;
+}"#, r#"fn main() {
+    let x = 42; // No space
+    let y = 24; // With space
+    return x + y;
+}"#);
+    }
+
+    #[test]
+    fn test_standalone_comment_handling() {
+        // Test that standalone comments are preserved with their indentation
+        reformat_prints_as(r#"fn main() {
+    // Standalone comment
+    let x = 42;
+    // Another comment
+    return x;
+}"#, r#"fn main() {
+    // Standalone comment
+    let x = 42;
+    // Another comment
+    return x;
+}"#);
+    }
+
+    #[test]
+    fn test_empty_line_basic_behavior() {
+        // Test that empty lines are preserved (limited to max 2)
+        reformat_prints_as(r#"fn main() {
+let x = 42;
+
+    let y = 24;
+
+
+
+    return x + y;
+}"#, r#"fn main() {
+    let x = 42;
+
+    let y = 24;
+
+
+    return x + y;
+}"#);
+    }
+
+    #[test]
+    fn test_mixed_comments_and_formatting() {
+        // Test comprehensive scenario showing current behavior
+        reformat_prints_as(r#"// Header comment
+fn main() {
+    // Standalone comment
+    let x = 42; // Inline comment
+    
+    if x == 42 {
+    return true; // Success
+    }
+}"#, r#"// Header comment
+fn main() {
+    // Standalone comment
+    let x = 42; // Inline comment
+
+    if x == 42 {
+        return true; // Success
+    }
+}"#);
     }
 }

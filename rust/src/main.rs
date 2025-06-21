@@ -1,5 +1,6 @@
 use ssalang2::print::PrettyPrinter;
 use ssalang2::parse::{Parser, ParseError};
+use ssalang2::lexer::Lexer;
 use std::env;
 use std::fs;
 use std::process;
@@ -87,7 +88,10 @@ fn main() {
         }
     };
     
-    // Parse the source code
+    // Parse the source code with token preservation
+    let mut lexer = Lexer::new(&source_code);
+    let tokens = lexer.tokenize();
+    
     let ast = match Parser::parse(&source_code) {
         Ok(ast) => ast,
         Err(e) => {
@@ -96,8 +100,8 @@ fn main() {
         }
     };
     
-    // Format the code
-    let formatter = PrettyPrinter::with_indent(&ast, 4);
+    // Format the code with comment/formatting preservation
+    let formatter = PrettyPrinter::new_reformat(&ast, &tokens, &source_code, 4);
     let formatted_code = formatter.print();
     
     // Output the formatted code
