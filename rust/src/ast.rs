@@ -1,5 +1,21 @@
-pub type LocalIndex = u16;
+pub type BlockIndex = u16;
 pub type ScopeIndex = u16;
+
+// Bundle scope and local index together
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct LocalRef {
+    pub scope: ScopeIndex,
+    pub index: u16,  // 0-based index within the scope
+}
+
+impl LocalRef {
+    pub fn new(scope: ScopeIndex, index: u16) -> Self {
+        Self { scope, index }
+    }
+}
+
+// Keep LocalIndex as alias for compatibility
+pub type LocalIndex = LocalRef;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct NodeRef(u32);
@@ -156,24 +172,26 @@ pub enum Node {
     BinopOr(NodeRef, NodeRef),  // left, right
 
     // Local variable nodes
-    LocalWrite(bool, LocalIndex, NodeRef), // is_definition, local_index, expr
-    LocalRead(LocalIndex),                 // local_index
+    DefineFn(LocalRef, NodeRef),   // local_ref, function_node - fn name() {} syntax
+    Define(LocalRef, NodeRef),     // local_ref, expr - const/let/static syntax
+    Assign(LocalRef, NodeRef),     // local_ref, expr - assignment to existing binding
+    LocalRead(LocalRef),           // local_ref
 
     // Control flow nodes
-    Block(Flags, ScopeIndex, NodesRef), // flags, scope_index, nodes
+    Block(Flags, BlockIndex, NodesRef), // flags, block_index, nodes
     If(Flags, NodeRef, NodeRef, NodeRef),    // flags, cond, then, els
     While(Flags, NodeRef, NodeRef),          // flags, cond, body
 
     // Jump nodes
-    Break(Flags, ScopeIndex, NodeRef), // flags, scope_index, value
-    Continue(Flags, ScopeIndex, NodeRef), // flags, scope_index, value
+    Break(Flags, BlockIndex, NodeRef), // flags, block_index, value
+    Continue(Flags, BlockIndex, NodeRef), // flags, block_index, value
     Return(NodeRef),                   // value_node
 
     // Function node
-    Func(Flags, LocalsRef, NodeRef, NodeRef), // flags, parameters, body, return_type
+    Func(Flags, ScopeIndex, NodeRef, NodeRef), // flags, scope_index, body, return_type
 
     // Module node
-    Module(NodesRef), // nodes
+    Module(ScopeIndex, NodesRef), // scope_index, nodes
 }
 
 // Per-node metadata stored alongside AST nodes
@@ -188,6 +206,13 @@ impl NodeInfo {
     }
 }
 
+// Scope for function-level variable storage
+#[derive(Debug, Clone)]
+pub struct Scope {
+    pub locals: LocalsRef,  // Points to locals in the flat array
+    pub parent: Option<ScopeIndex>,  // For nested functions later
+}
+
 // Separate structure for local variable metadata (used in function contexts)
 #[derive(Debug, Clone)]
 pub struct Local {
@@ -195,7 +220,7 @@ pub struct Local {
     pub is_param: bool,
     pub is_static: bool,
     pub is_const: bool,
-    pub ty: NodeRef,
+    pub ty: Option<NodeRef>,
 }
 
 // AST that owns all associated data including the tree structure itself
@@ -207,6 +232,7 @@ pub struct Ast {
     strings: Vec<String>,     // String storage for string literals
     symbols: Vec<String>,     // Symbol storage for identifiers (interned)
     symbol_map: std::collections::HashMap<String, SymbolRef>, // For symbol interning
+    scopes: Vec<Scope>,       // All function scopes
     root: Option<NodeRef>,    // Root node of the tree
 }
 
@@ -220,6 +246,7 @@ impl Ast {
             strings: Vec::new(),
             symbols: Vec::new(),
             symbol_map: std::collections::HashMap::new(),
+            scopes: Vec::new(),
             root: None,
         }
     }
@@ -245,38 +272,72 @@ impl Ast {
         &self.nodes[index]
     }
 
+    pub fn get_node_mut(&mut self, node_ref: NodeRef) -> &mut Node {
+        let index = node_ref.get() as usize;
+        &mut self.nodes[index]
+    }
+
     pub fn get_node_info(&self, node_ref: NodeRef) -> &NodeInfo {
         let index = node_ref.get() as usize;
         &self.node_info[index]
     }
 
     // Local storage methods
-    pub fn add_local(&mut self, local: Local) -> LocalIndex {
-        let index = self.locals.len() as LocalIndex;
+    pub fn add_local(&mut self, local: Local) -> u16 {
+        let index = self.locals.len() as u16;
         self.locals.push(local);
         index
     }
 
     pub fn add_locals(&mut self, locals: &[Local]) -> LocalsRef {
-        let offset = self.locals.len() as u16;
         let count = locals.len() as u16;
+        if count == 0 {
+            return LocalsRef::empty();
+        }
+        let offset = self.locals.len() as u16;
         self.locals.extend_from_slice(locals);
         LocalsRef::new(offset, count)
     }
 
-    pub fn get_locals(&self, locals_ref: LocalsRef) -> &[Local] {
+    pub fn get_locals_by_ref(&self, locals_ref: LocalsRef) -> &[Local] {
         let start = locals_ref.offset as usize;
         let end = start + (locals_ref.count as usize);
         &self.locals[start..end]
     }
 
-    pub fn get_local(&self, index: LocalIndex) -> &Local {
-        &self.locals[index as usize]
+    pub fn get_locals(&self, scope_index: ScopeIndex) -> &[Local] {
+        let scope = &self.scopes[scope_index as usize];
+        self.get_locals_by_ref(scope.locals)
     }
 
-    pub fn get_local_name(&self, index: LocalIndex) -> &str {
-        let local = self.get_local(index);
+    pub fn get_local(&self, local_ref: LocalRef) -> &Local {
+        let scope = &self.scopes[local_ref.scope as usize];
+        let locals = self.get_locals_by_ref(scope.locals);
+        &locals[local_ref.index as usize]
+    }
+
+    pub fn get_local_name(&self, local_ref: LocalRef) -> &str {
+        let local = self.get_local(local_ref);
         self.get_symbol(local.name)
+    }
+
+    pub fn locals_len(&self) -> usize {
+        self.locals.len()
+    }
+
+    // Scope management methods
+    pub fn add_scope(&mut self, scope: Scope) -> ScopeIndex {
+        let scope_index = self.scopes.len() as ScopeIndex;
+        self.scopes.push(scope);
+        scope_index
+    }
+
+    pub fn get_scope(&self, scope_index: ScopeIndex) -> &Scope {
+        &self.scopes[scope_index as usize]
+    }
+
+    pub fn update_scope_locals(&mut self, scope_index: ScopeIndex, locals_ref: LocalsRef) {
+        self.scopes[scope_index as usize].locals = locals_ref;
     }
 
     // Node reference storage methods
@@ -329,6 +390,7 @@ impl Ast {
     pub fn symbol_count(&self) -> usize {
         self.symbols.len()
     }
+
 }
 
 #[cfg(test)]

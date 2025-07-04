@@ -1,4 +1,4 @@
-use crate::{ast::{Ast, Node, NodeRef, TypeAtom}, lexer::{Token, TokenType}};
+use crate::{ast::{Ast, Node, NodeRef, TypeAtom, ScopeIndex}, lexer::{Token, TokenType}};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PrintMode {
@@ -235,29 +235,50 @@ impl<'a> PrettyPrinter<'a> {
             Node::BinopLtEq(_, _) | Node::BinopGtEq(_, _) | Node::BinopAnd(_, _) | Node::BinopOr(_, _) => {
                 self.print_expression(node_ref);
             }
-            Node::LocalWrite(is_definition, local_index, expr) => {
-                let var_name = self.ast.get_local_name(*local_index);
-                if *is_definition {
-                    // This is a variable declaration (let or const)
-                    let local = self.ast.get_local(*local_index);
-                    if local.is_static {
-                        self.emit_token(TokenType::Static, "static ");
-                    }
-                    if local.is_const {
-                        self.emit_token(TokenType::Const, "const ");
-                    } else {
-                        self.emit_token(TokenType::Let, "let ");
-                    }
-                    self.emit_token(TokenType::Identifier, var_name);
-                    self.emit_token(TokenType::Assign, " = ");
-                    self.print_expression(*expr);
-                    self.emit_token(TokenType::Semicolon, ";");
-                } else {
-                    // This is an assignment
-                    self.emit_token(TokenType::Identifier, var_name);
-                    self.emit_token(TokenType::Assign, " = ");
-                    self.print_expression(*expr);
+            Node::DefineFn(local_index, func_node) => {
+                let func_name = self.ast.get_local_name(*local_index);
+                let local = self.ast.get_local(*local_index);
+                
+                if local.is_static {
+                    self.emit_token(TokenType::Static, "static ");
                 }
+                
+                self.emit_token(TokenType::Fn, "fn ");
+                self.emit_token(TokenType::Identifier, func_name);
+                
+                // Delegate to shared function printing logic
+                if let Node::Func(flags, scope_index, body, return_type) = self.ast.get_node(*func_node) {
+                    if flags.is_inline() {
+                        // Note: inline flag should be on the DefineFn, but for now check the Func
+                        // This might need adjustment based on how flags are handled
+                    }
+                    
+                    self.print_function_signature_and_body(*scope_index, *body, *return_type);
+                }
+            }
+            Node::Define(local_index, expr) => {
+                let var_name = self.ast.get_local_name(*local_index);
+                let local = self.ast.get_local(*local_index);
+                
+                if local.is_static {
+                    self.emit_token(TokenType::Static, "static ");
+                }
+                if local.is_const {
+                    self.emit_token(TokenType::Const, "const ");
+                } else {
+                    self.emit_token(TokenType::Let, "let ");
+                }
+                self.emit_token(TokenType::Identifier, var_name);
+                self.emit_token(TokenType::Assign, " = ");
+                self.print_expression(*expr);
+                self.emit_token(TokenType::Semicolon, ";");
+            }
+            Node::Assign(local_index, expr) => {
+                let var_name = self.ast.get_local_name(*local_index);
+                self.emit_token(TokenType::Identifier, var_name);
+                self.emit_token(TokenType::Assign, " = ");
+                self.print_expression(*expr);
+                self.emit_token(TokenType::Semicolon, ";");
             }
             Node::LocalRead(local_index) => {
                 let var_name = self.ast.get_local_name(*local_index);
@@ -361,7 +382,7 @@ impl<'a> PrettyPrinter<'a> {
                 self.print_expression(*value);
                 self.emit_token(TokenType::Semicolon, ";");
             }
-            Node::Func(flags, locals_ref, body, return_type) => {
+            Node::Func(flags, scope_index, body, return_type) => {
                 if flags.is_static() {
                     self.emit_token(TokenType::Static, "static ");
                 }
@@ -369,43 +390,12 @@ impl<'a> PrettyPrinter<'a> {
                     self.emit_token(TokenType::Inline, "inline ");
                 }
 
-                self.emit_token(TokenType::Fn, "fn ");
-                self.emit_token(TokenType::Identifier, "main");
-                self.emit_token(TokenType::LeftParen, "(");
-
-                // Print parameters
-                let params = self.ast.get_locals(*locals_ref);
-
-                for (i, local) in params.iter().enumerate() {
-                    if i > 0 {
-                        self.emit_token(TokenType::Comma, ", ");
-                    }
-                    if local.is_static {
-                        self.emit_token(TokenType::Static, "static ");
-                    }
-                    let param_name = self.ast.get_symbol(local.name);
-                    self.emit_token(TokenType::Identifier, param_name);
-                    self.emit_token(TokenType::Colon, ": ");
-                    self.print_node(local.ty);
-                }
-
-                self.emit_token(TokenType::RightParen, ")");
-
-                // Print return type if not unit
-                if !matches!(
-                    self.ast.get_node(*return_type),
-                    Node::TypeAtom(TypeAtom::Unit)
-                ) {
-                    self.emit_token(TokenType::Arrow, " -> ");
-                    self.print_node(*return_type);
-                }
-
-                self.buffer.push(' ');
-
-                // Print function body (always a Block)
-                self.print_node(*body);
+                self.emit_token(TokenType::Fn, "fn");
+                
+                // Delegate to shared function printing logic
+                self.print_function_signature_and_body(*scope_index, *body, *return_type);
             }
-            Node::Module(nodes_ref) => {
+            Node::Module(_locals_ref, nodes_ref) => {
                 let nodes = self.ast.get_node_refs(*nodes_ref);
                 for (i, &node) in nodes.iter().enumerate() {
                     if i > 0 {
@@ -587,6 +577,46 @@ impl<'a> PrettyPrinter<'a> {
     fn is_unit_value(&self, node_ref: NodeRef) -> bool {
         // Check if this represents a unit value (like empty break/continue)
         matches!(self.ast.get_node(node_ref), Node::ConstUnit)
+    }
+
+    /// Print function signature and body: (params) -> return_type { body }
+    /// Shared between DefineFn and Func node printing
+    fn print_function_signature_and_body(&mut self, scope_index: ScopeIndex, body: NodeRef, return_type: NodeRef) {
+        self.emit_token(TokenType::LeftParen, "(");
+        
+        for (i, local) in self.ast.get_locals(scope_index).iter().enumerate() {
+            if !local.is_param {
+                break;
+            }
+            if i > 0 {
+                self.emit_token(TokenType::Comma, ", ");
+            }
+            if local.is_static {
+                self.emit_token(TokenType::Static, "static ");
+            }
+            let param_name = self.ast.get_symbol(local.name);
+            self.emit_token(TokenType::Identifier, param_name);
+            if let Some(ty) = local.ty {
+                self.emit_token(TokenType::Colon, ": ");
+                self.print_node(ty);
+            }
+        }
+        
+        self.emit_token(TokenType::RightParen, ")");
+        
+        // Print return type if not unit
+        if !matches!(
+            self.ast.get_node(return_type),
+            Node::TypeAtom(TypeAtom::Unit)
+        ) {
+            self.emit_token(TokenType::Arrow, " -> ");
+            self.print_node(return_type);
+        }
+        
+        self.buffer.push(' ');
+        
+        // Print function body
+        self.print_node(body);
     }
 }
 

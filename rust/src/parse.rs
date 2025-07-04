@@ -6,8 +6,8 @@ use std::collections::HashMap;
 // Cleanup operations for scope management
 #[derive(Debug, Clone)]
 enum ScopeCleanup {
-    Delete(SymbolRef, ScopeIndex), // Remove binding when exiting scope
-    Replace(SymbolRef, LocalIndex, ScopeIndex), // Restore shadowed binding when exiting scope
+    Delete(SymbolRef, BlockIndex), // Remove binding when exiting block
+    Replace(SymbolRef, LocalRef, BlockIndex), // Restore shadowed binding when exiting block
 }
 
 pub struct Parser {
@@ -19,10 +19,16 @@ pub struct Parser {
     ast: Ast,
 
     // Scope management for local bindings
-    binding_map: HashMap<SymbolRef, LocalIndex>, // Current symbol -> local index mappings
+    binding_map: HashMap<SymbolRef, LocalRef>, // Current symbol -> local ref mappings
     cleanup_stack: Vec<ScopeCleanup>,            // Stack of cleanup operations
-    next_scope_id: ScopeIndex,                   // Counter for unique scope IDs
+    next_block_id: BlockIndex,                   // Counter for unique block IDs
     scope_stack: Vec<ScopeIndex>,                // Stack of currently active scope IDs
+    block_stack: Vec<BlockIndex>,                // Stack of currently active block IDs
+    
+    // Function local collection
+    function_locals: Vec<Local>,                 // Stack of locals for current scope being parsed
+    current_scope_index: Option<ScopeIndex>,    // Current scope being parsed
+    scope_locals_start: Vec<usize>,             // Starting index for each scope's locals in function_locals
 }
 
 #[derive(Debug)]
@@ -53,8 +59,12 @@ impl Parser {
             ast: Ast::new(),
             binding_map: HashMap::new(),
             cleanup_stack: Vec::new(),
-            next_scope_id: 1, // Start scope IDs at 1 (0 can be reserved for global/invalid)
+            next_block_id: 1, // Start block IDs at 1 (0 can be reserved for global/invalid)
             scope_stack: Vec::new(),
+            block_stack: Vec::new(),
+            function_locals: Vec::new(),
+            current_scope_index: None,
+            scope_locals_start: Vec::new(),
         };
 
         parser.update_current_token();
@@ -90,6 +100,25 @@ impl Parser {
         self.update_current_token();
     }
 
+    fn peek_next_token(&self) -> Token {
+        let mut peek_index = self.token_index + 1;
+        
+        // Skip formatting tokens to find next semantic token
+        while peek_index < self.tokens.len() {
+            let token = self.tokens[peek_index];
+            if !matches!(
+                token.token_type,
+                TokenType::Comment | TokenType::EmptyLine
+            ) {
+                return token; // return semantic token
+            }
+            peek_index += 1;
+        }
+        
+        // Return EOF token if we've reached the end
+        Token::new(TokenType::Eof, 0, 0)
+    }
+
     fn expect(&mut self, expected: TokenType) -> ParseResult<Token> {
         let token = self.current_token;
         if token.token_type == expected {
@@ -123,14 +152,14 @@ impl Parser {
         self.exit_scope(module_scope_id);
 
         let nodes_ref = self.ast.add_node_refs(&nodes);
-        let module_node = Node::Module(nodes_ref);
+        let module_node = Node::Module(module_scope_id, nodes_ref);
         let info = NodeInfo::new(start_token_index);
         Ok(self.ast.add_node(module_node, info))
     }
 
     fn parse_top_level_definition(&mut self) -> ParseResult<NodeRef> {
         match self.current_token.token_type {
-            TokenType::Const => self.parse_variable_declaration(true),
+            TokenType::Const => self.parse_variable_declaration(true, false),
             TokenType::Inline | TokenType::Fn => self.parse_function(),
             _ => Err(ParseError::new(
                 format!("Expected function or constant definition, found {:?}", self.current_token.token_type),
@@ -156,27 +185,43 @@ impl Parser {
 
         self.expect(TokenType::Fn)?;
 
-        if self.current_token.token_type  != TokenType::Identifier {
-            return Err(ParseError::new(
-                "Expected function name".to_string(),
-                self.current_token.start,
-            ));
-        }
-        let name = self.get_token_text(&self.current_token).to_owned();
-        let _name_sym = self.ast.intern_symbol(name); // TODO: store
-        self.advance();
+        if self.current_token.token_type == TokenType::Identifier {
+            // Named function: fn foo() {} -> const foo = fn() {}
+            let name = self.get_token_text(&self.current_token).to_owned();
+            let name_ref = self.ast.intern_symbol(name);
+            self.advance();
 
-        // Enter function scope for parameters and body
+            // Parse the function value
+            let func_value = self.parse_function_value(flags)?;
+
+            // Create a local binding for the function name
+            let local = Local {
+                name: name_ref,
+                is_param: false,
+                is_static: false, // Functions are not static by default
+                is_const: true,   // Functions are const
+                ty: None, // TODO: proper function type inference
+            };
+
+            self.create_function_definition(local, func_value, start_token_index)
+        } else {
+            // Anonymous function: fn() {}
+            self.parse_function_value(flags)
+        }
+    }
+
+    fn parse_function_value(&mut self, flags: Flags) -> ParseResult<NodeRef> {
+        let start_token_index = self.token_index;
+
         let function_scope_id = self.enter_scope();
 
         self.expect(TokenType::LeftParen)?;
 
-        // Parse parameters using local SmallVec
-        let mut parameters: SmallVec<[Local; 8]> = SmallVec::new();
+        // Parse parameters directly into function_locals
         if self.current_token.token_type != TokenType::RightParen {
             loop {
                 let param = self.parse_parameter()?;
-                parameters.push(param);
+                self.add_and_bind_local(param);
 
                 if self.current_token.token_type == TokenType::Comma {
                     self.advance();
@@ -187,19 +232,6 @@ impl Parser {
         }
 
         self.expect(TokenType::RightParen)?;
-
-        // Add parameters to the AST and bind them to scope
-        let locals_ref = if parameters.is_empty() {
-            LocalsRef::empty()
-        } else {
-            let locals_ref = self.ast.add_locals(&parameters);
-            // Now bind parameters to scope using their actual indices
-            for (i, param) in parameters.iter().enumerate() {
-                let local_index = (locals_ref.offset + i as u16) as LocalIndex;
-                self.bind_local(param.name, local_index, function_scope_id);
-            }
-            locals_ref
-        };
 
         // Parse return type
         let return_type = if self.current_token.token_type == TokenType::Arrow {
@@ -213,14 +245,13 @@ impl Parser {
             )
         };
 
-        // Parse function body (will create its own nested scope)
-        let body = self.parse_block_with_scope(function_scope_id)?;
+        // Parse function body
+        let body = self.parse_block()?;
 
         // Exit function scope
         self.exit_scope(function_scope_id);
 
-        // Create function node with scope information
-        let func_node = Node::Func(flags, locals_ref, body, return_type);
+        let func_node = Node::Func(flags, function_scope_id, body, return_type);
         Ok(self
             .ast
             .add_node(func_node, NodeInfo::new(start_token_index)))
@@ -257,7 +288,7 @@ impl Parser {
             is_param: true,
             is_static,
             is_const: false,
-            ty: param_type,
+            ty: Some(param_type),
         })
     }
 
@@ -292,20 +323,14 @@ impl Parser {
         }
     }
 
-    // Parse a block statement (creates its own scope)
-    fn parse_block(&mut self) -> ParseResult<NodeRef> {
-        let block_scope_id = self.enter_scope();
-        let result = self.parse_block_with_scope(block_scope_id);
-        self.exit_scope(block_scope_id);
-        result
-    }
 
-    // Parse a block statement with a specific scope ID
-    fn parse_block_with_scope(&mut self, scope_id: ScopeIndex) -> ParseResult<NodeRef> {
+    // Parse a block statement
+    fn parse_block(&mut self) -> ParseResult<NodeRef> {
         let start_token_index = self.token_index;
 
         self.expect(TokenType::LeftBrace)?;
 
+        let block_id = self.enter_block();
         let flags = Flags::new();
 
         // Parse all statements in the block
@@ -330,8 +355,10 @@ impl Parser {
 
         self.expect(TokenType::RightBrace)?;
 
+        self.exit_block(block_id);
+
         let statements_ref = self.ast.add_node_refs(&statements);
-        let block_node = Node::Block(flags, scope_id, statements_ref);
+        let block_node = Node::Block(flags, block_id, statements_ref);
         Ok(self
             .ast
             .add_node(block_node, NodeInfo::new(start_token_index)))
@@ -341,16 +368,16 @@ impl Parser {
     fn parse_statement(&mut self) -> ParseResult<NodeRef> {
         match &self.current_token.token_type {
             // Statement-only forms
-            TokenType::Let => self.parse_variable_declaration(false),
-            TokenType::Const => self.parse_variable_declaration(true),
+            TokenType::Let => self.parse_variable_declaration(false, false),
+            TokenType::Const => self.parse_variable_declaration(true, false),
             TokenType::Return => self.parse_return_statement(),
             TokenType::Break => self.parse_break_statement(),
             TokenType::Continue => self.parse_continue_statement(),
             TokenType::Static => {
                 self.advance();
                 match self.current_token.token_type {
-                    TokenType::Let => self.parse_variable_declaration(false),
-                    TokenType::Const => self.parse_variable_declaration(true),
+                    TokenType::Let => self.parse_variable_declaration(false, true),
+                    TokenType::Const => self.parse_variable_declaration(true, true),
                     TokenType::Eof => Err(ParseError::new(
                         "Unexpected end of input after 'static'".to_string(),
                         self.current_token.start,
@@ -362,6 +389,15 @@ impl Parser {
                 }
             }
             TokenType::While => self.parse_while_statement(),
+            // Check for assignment vs expression
+            TokenType::Identifier => {
+                // Look ahead to see if this is an assignment (identifier = expr)
+                if self.peek_next_token().token_type == TokenType::Assign {
+                    self.parse_assignment()
+                } else {
+                    self.parse_expression()
+                }
+            }
             // Expression forms
             TokenType::If => self.parse_if_statement(),
             TokenType::LeftBrace => self.parse_block(),
@@ -369,12 +405,13 @@ impl Parser {
         }
     }
 
-    // Parse variable declaration (let or const)
-    fn parse_variable_declaration(&mut self, is_const: bool) -> ParseResult<NodeRef> {
+    fn parse_variable_declaration(&mut self, is_const: bool, is_static: bool) -> ParseResult<NodeRef> {
         let start_token_index = self.token_index;
 
-        // Check for static modifier first
-        let is_static = if self.current_token.token_type == TokenType::Static {
+        // Use the passed is_static flag, or check for static modifier if not already handled
+        let is_static = if is_static {
+            is_static
+        } else if self.current_token.token_type == TokenType::Static {
             self.advance();
             true
         } else {
@@ -406,34 +443,52 @@ impl Parser {
 
         // Create a Local entry for this variable
         let name_ref = self.ast.intern_symbol(var_name);
-        // For now, assume i32 type - in a real implementation this would be inferred
-        let var_type = self.ast.add_node(
-            Node::TypeAtom(TypeAtom::I32),
-            NodeInfo::new(self.token_index),
-        );
         let local = Local {
             name: name_ref,
             is_param: false,
             is_static,
             is_const,
-            ty: var_type,
+            ty: None,
         };
 
-        // Add to AST locals and bind in current scope
-        let local_index = self.ast.add_local(local);
+        self.create_local_binding(local, expr, start_token_index)
+    }
 
-        // Get current scope for binding
-        let current_scope = *self
-            .scope_stack
-            .last()
-            .expect("Should be in a scope when parsing variable declaration");
-        self.bind_local(name_ref, local_index, current_scope);
-
-        // Create a LocalWrite node (is_definition=true, with proper local_index)
-        let local_write = Node::LocalWrite(true, local_index, expr);
-        Ok(self
-            .ast
-            .add_node(local_write, NodeInfo::new(start_token_index)))
+    fn parse_assignment(&mut self) -> ParseResult<NodeRef> {
+        let start_token_index = self.token_index;
+        
+        // Parse identifier
+        let identifier_text = if let TokenType::Identifier = &self.current_token.token_type {
+            let name_text = self.get_token_text(&self.current_token).to_string();
+            self.advance();
+            name_text
+        } else {
+            return Err(ParseError::new(
+                "Expected identifier for assignment".to_string(),
+                self.current_token.start,
+            ));
+        };
+        
+        // Expect '=' token
+        self.expect(TokenType::Assign)?;
+        
+        // Parse expression
+        let expr = self.parse_expression()?;
+        self.expect(TokenType::Semicolon)?;
+        
+        // Look up the identifier to get its local index
+        let name_ref = self.ast.intern_symbol(identifier_text.clone());
+        if let Some(local_ref) = self.binding_map.get(&name_ref).copied() {
+            // Create Assign node with final LocalRef
+            let assign_node = Node::Assign(local_ref, expr);
+            let node_ref = self.ast.add_node(assign_node, NodeInfo::new(start_token_index));
+            Ok(node_ref)
+        } else {
+            Err(ParseError::new(
+                format!("Undefined variable in assignment: {}", identifier_text),
+                self.current_token.start,
+            ))
+        }
     }
 
     // Parse if statement
@@ -694,12 +749,11 @@ impl Parser {
                 // Look up identifier in binding map
                 let name_ref = self.ast.intern_symbol(identifier_text.clone());
 
-                if let Some(local_index) = self.lookup_local(name_ref) {
-                    // Found binding - create LocalRead
-                    let local_read = Node::LocalRead(local_index);
-                    Ok(self
-                        .ast
-                        .add_node(local_read, NodeInfo::new(start_token_index)))
+                if let Some(local_ref) = self.binding_map.get(&name_ref).copied() {
+                    // Found binding - create LocalRead with final LocalRef
+                    let local_read = Node::LocalRead(local_ref);
+                    let node_ref = self.ast.add_node(local_read, NodeInfo::new(start_token_index));
+                    Ok(node_ref)
                 } else {
                     // Identifier not found in current scope
                     return Err(ParseError::new(
@@ -780,31 +834,31 @@ impl Parser {
 
     // Scope management methods
 
-    /// Enter a new scope and return its unique ID
-    fn enter_scope(&mut self) -> ScopeIndex {
-        let scope_id = self.next_scope_id;
-        self.next_scope_id += 1;
-        self.scope_stack.push(scope_id);
-        scope_id
+    /// Enter a new block scope and return its unique ID
+    fn enter_block(&mut self) -> BlockIndex {
+        let block_id = self.next_block_id;
+        self.next_block_id += 1;
+        self.block_stack.push(block_id);
+        block_id
     }
 
-    /// Exit a scope by applying all cleanup operations for that scope
-    fn exit_scope(&mut self, scope_id: ScopeIndex) {
-        // Verify we're exiting the most recent scope
-        if let Some(&top_scope) = self.scope_stack.last() {
-            assert_eq!(top_scope, scope_id, "Exiting scope out of order");
-            self.scope_stack.pop();
+    /// Exit a block by applying all cleanup operations for that block
+    fn exit_block(&mut self, block_id: BlockIndex) {
+        // Verify we're exiting the most recent block
+        if let Some(&top_block) = self.block_stack.last() {
+            assert_eq!(top_block, block_id, "Exiting block out of order");
+            self.block_stack.pop();
         }
 
-        // Pop and apply cleanup operations until we've handled all for this scope
+        // Pop and apply cleanup operations until we've handled all for this block
         while let Some(cleanup) = self.cleanup_stack.last() {
-            let cleanup_scope = match cleanup {
-                ScopeCleanup::Delete(_, scope) => *scope,
-                ScopeCleanup::Replace(_, _, scope) => *scope,
+            let cleanup_block = match cleanup {
+                ScopeCleanup::Delete(_, block) => *block,
+                ScopeCleanup::Replace(_, _, block) => *block,
             };
 
-            if cleanup_scope != scope_id {
-                break; // We've finished this scope's cleanup operations
+            if cleanup_block != block_id {
+                break; // We've finished this block's cleanup operations
             }
 
             // Remove and apply the cleanup operation
@@ -813,32 +867,118 @@ impl Parser {
                 ScopeCleanup::Delete(symbol, _) => {
                     self.binding_map.remove(&symbol);
                 }
-                ScopeCleanup::Replace(symbol, old_local_index, _) => {
-                    self.binding_map.insert(symbol, old_local_index);
+                ScopeCleanup::Replace(symbol, old_local_ref, _) => {
+                    self.binding_map.insert(symbol, old_local_ref);
                 }
             }
         }
     }
 
-    /// Bind a symbol to a local index, handling shadowing
-    fn bind_local(&mut self, symbol: SymbolRef, local_index: LocalIndex, scope_id: ScopeIndex) {
-        if let Some(old_local_index) = self.binding_map.get(&symbol) {
-            // Symbol is being shadowed - save the old binding for restoration
-            self.cleanup_stack
-                .push(ScopeCleanup::Replace(symbol, *old_local_index, scope_id));
-        } else {
-            // New binding - mark for deletion when scope exits
-            self.cleanup_stack
-                .push(ScopeCleanup::Delete(symbol, scope_id));
-        }
-
-        // Update current binding
-        self.binding_map.insert(symbol, local_index);
+    /// Enter a new function scope and return its unique ID
+    fn enter_scope(&mut self) -> ScopeIndex {
+        // Create scope in AST immediately with empty locals
+        let scope = Scope {
+            locals: LocalsRef::empty(),
+            parent: None, // TODO: For nested functions later
+        };
+        let scope_index = self.ast.add_scope(scope);
+        
+        self.scope_stack.push(scope_index);
+        self.current_scope_index = Some(scope_index);
+        
+        // Track where this scope's locals start in function_locals
+        self.scope_locals_start.push(self.function_locals.len());
+        
+        scope_index
     }
 
-    /// Look up the current binding for a symbol
-    fn lookup_local(&self, symbol: SymbolRef) -> Option<LocalIndex> {
-        self.binding_map.get(&symbol).copied()
+    /// Commit collected locals to the scope and exit it
+    fn exit_scope(&mut self, scope_id: ScopeIndex) {
+        // Verify we're exiting the most recent scope
+        if let Some(&top_scope) = self.scope_stack.last() {
+            assert_eq!(top_scope, scope_id, "Exiting scope out of order");
+            self.scope_stack.pop();
+        }
+        
+        // Commit locals before popping scope_locals_start
+        let locals_start = self.scope_locals_start.last().copied().unwrap_or(0);
+        
+        // Get locals for this scope
+        let scope_locals = &self.function_locals[locals_start..];
+        let locals_ref = if scope_locals.is_empty() {
+            LocalsRef::empty()
+        } else {
+            self.ast.add_locals(scope_locals)
+        };
+
+        // Update the scope's locals_ref
+        self.ast.update_scope_locals(scope_id, locals_ref);
+        
+        // Truncate function_locals back to where this scope started
+        self.function_locals.truncate(locals_start);
+        
+        // Update current scope and pop scope locals start tracking
+        self.current_scope_index = self.scope_stack.last().copied();
+        self.scope_locals_start.pop();
+    }
+
+
+    /// Add a local to the function_locals stack and bind it to current scope
+    /// Returns the LocalRef for this local
+    fn add_and_bind_local(&mut self, local: Local) -> LocalRef {
+        // Calculate 0-based index within current scope
+        let scope_start = self.scope_locals_start.last().copied().unwrap_or(0);
+        let index_in_scope = (self.function_locals.len() - scope_start) as u16;
+        let name_ref = local.name;
+        self.function_locals.push(local);
+        
+        // Create LocalRef with current scope
+        let current_scope = self.current_scope_index.expect("Should be in a scope when adding local");
+        let local_ref = LocalRef::new(current_scope, index_in_scope);
+
+        // Handle shadowing for cleanup - use current block if in one, otherwise no cleanup needed
+        // (module/function level variables don't get cleaned up until scope ends)
+        if let Some(&current_block) = self.block_stack.last() {
+            if let Some(old_local_ref) = self.binding_map.get(&name_ref) {
+                // Symbol is being shadowed - save the old binding for restoration
+                self.cleanup_stack
+                    .push(ScopeCleanup::Replace(name_ref, *old_local_ref, current_block));
+            } else {
+                // New binding - mark for deletion when block exits
+                self.cleanup_stack
+                    .push(ScopeCleanup::Delete(name_ref, current_block));
+            }
+        }
+        // If not in a block, variables persist until scope ends (handled by exit_scope)
+
+        // Update current binding
+        self.binding_map.insert(name_ref, local_ref);
+
+        local_ref
+    }
+
+    /// Create a local binding and return a Define node
+    /// Helper method for const/let/static syntax
+    fn create_local_binding(&mut self, local: Local, expr: NodeRef, start_token_index: usize) -> ParseResult<NodeRef> {
+        let local_ref = self.add_and_bind_local(local);
+
+        // Create Define node with final LocalRef
+        let define_node = Node::Define(local_ref, expr);
+        let node_ref = self.ast.add_node(define_node, NodeInfo::new(start_token_index));
+        
+        Ok(node_ref)
+    }
+
+    /// Create a function definition and return a DefineFn node
+    /// Helper method for fn name() {} syntax
+    fn create_function_definition(&mut self, local: Local, func_node: NodeRef, start_token_index: usize) -> ParseResult<NodeRef> {
+        let local_ref = self.add_and_bind_local(local);
+
+        // Create DefineFn node with final LocalRef
+        let define_fn_node = Node::DefineFn(local_ref, func_node);
+        let node_ref = self.ast.add_node(define_fn_node, NodeInfo::new(start_token_index));
+        
+        Ok(node_ref)
     }
 
     pub fn parse(input: &str) -> ParseResult<Ast> {
@@ -879,6 +1019,58 @@ mod tests {
     #[test]
     fn test_simple_function() {
         roundtrip("fn main() { return 42; }");
+    }
+
+    #[test]
+    fn test_assignment() {
+        // Test variable assignment
+        roundtrip("fn main() { let x = 5; x = 10; return x; }");
+        
+        // Test multiple assignments
+        roundtrip("fn main() { let x = 1; let y = 2; x = y; y = x; return x + y; }");
+        
+        // Test assignment with expressions
+        roundtrip("fn main() { let x = 1; let y = 2; x = x + y * 3; return x; }");
+        
+        // Test assignment to const variables (should be allowed at parse level)
+        roundtrip("fn main() { const x = 1; x = 2; return x; }");
+    }
+
+    #[test]
+    fn test_assignment_errors() {
+        // Test assignment to undefined variable
+        let result = Parser::parse("fn main() { x = 5; }");
+        assert!(result.is_err());
+        
+        // Test that the error message is helpful
+        if let Err(err) = result {
+            assert!(err.message.contains("Undefined variable"));
+            assert!(err.message.contains("x"));
+        }
+    }
+
+    #[test]
+    fn test_simple_module_const() {
+        // Debug test for module-level const
+        roundtrip("const PI = 42;");
+    }
+
+    #[test] 
+    fn test_simple_const_in_function() {
+        // Debug test for function-level variable
+        roundtrip("fn main() { let x = 5; }");
+    }
+
+    #[test]
+    fn test_debug_module_const_read() {
+        // Test with variable read
+        roundtrip("const PI = 42; fn main() { return PI; }");
+    }
+
+    #[test]
+    fn test_debug_module_const_let() {
+        // Test the exact failing case
+        roundtrip("const PI = 42; fn main() { let x = PI; }");
     }
 
     #[test]
@@ -1182,13 +1374,31 @@ mod tests {
     #[test]
     fn test_module_multiple_functions() {
         // Test module with multiple function definitions
-        roundtrip("fn main() { let x = 42; }\n\nfn helper() -> bool { true }");
+        roundtrip("fn main() { let x = 42; } fn helper() -> bool { true }");
     }
 
     #[test]
     fn test_module_const_only() {
         // Test module with just a constant
         roundtrip("const PI = 42;");
+    }
+
+    #[test]
+    fn debug_two_module_consts() {
+        let input = "const PI = 42; const E = 27;";
+        let ast = Parser::parse(input).unwrap();
+        let printer = PrettyPrinter::new_generate(&ast, 0);
+        let output = printer.print();
+        assert_eq!(input, output);
+    }
+
+    #[test]
+    fn debug_module_const_and_simple_function() {
+        let input = "const PI = 42; fn main() { let x = 1; }";
+        let ast = Parser::parse(input).unwrap();
+        let printer = PrettyPrinter::new_generate(&ast, 0);
+        let output = printer.print();
+        assert_eq!(input, output);
     }
 
     #[test]
