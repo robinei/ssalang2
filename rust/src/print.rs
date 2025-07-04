@@ -327,10 +327,7 @@ impl<'a> PrettyPrinter<'a> {
                     self.emit_token(TokenType::RightBrace, "}");
                 }
             }
-            Node::If(is_static, is_inline, cond, then_branch, else_branch) => {
-                if *is_static == IsStatic::Yes {
-                    self.emit_token(TokenType::Static, "static ");
-                }
+            Node::If(is_inline, cond, then_branch, else_branch) => {
                 if *is_inline == IsInline::Yes {
                     self.emit_token(TokenType::Inline, "inline ");
                 }
@@ -353,10 +350,7 @@ impl<'a> PrettyPrinter<'a> {
                     self.print_node(*else_branch);
                 }
             }
-            Node::While(is_static, is_inline, cond, body) => {
-                if *is_static == IsStatic::Yes {
-                    self.emit_token(TokenType::Static, "static ");
-                }
+            Node::While(is_inline, cond, body) => {
                 if *is_inline == IsInline::Yes {
                     self.emit_token(TokenType::Inline, "inline ");
                 }
@@ -580,7 +574,7 @@ impl<'a> PrettyPrinter<'a> {
     }
 
     fn is_if_node(&self, node_ref: NodeRef) -> bool {
-        matches!(self.ast.get_node(node_ref), Node::If(_, _, _, _, _))
+        matches!(self.ast.get_node(node_ref), Node::If(_, _, _, _))
     }
 
     fn is_empty_or_unit_only_block(&self, node_ref: NodeRef) -> bool {

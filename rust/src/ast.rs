@@ -154,8 +154,8 @@ pub enum Node {
 
     // Control flow nodes
     Block(IsStatic, BlockIndex, NodesRef), // is_static, block_index, nodes
-    If(IsStatic, IsInline, NodeRef, NodeRef, NodeRef),    // is_static, is_inline, cond, then, els
-    While(IsStatic, IsInline, NodeRef, NodeRef),          // is_static, is_inline, cond, body
+    If(IsInline, NodeRef, NodeRef, NodeRef),    // is_inline, cond, then, els
+    While(IsInline, NodeRef, NodeRef),          // is_inline, cond, body
 
     // Jump nodes
     Break(BlockIndex, NodeRef), // block_index, value

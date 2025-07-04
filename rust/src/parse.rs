@@ -157,8 +157,8 @@ impl Parser {
 
     fn parse_top_level_definition(&mut self) -> ParseResult<NodeRef> {
         match self.current_token.token_type {
-            TokenType::Const => self.parse_variable_declaration(true, false),
-            TokenType::Inline | TokenType::Fn => self.parse_function(),
+            TokenType::Const => self.parse_variable_declaration(),
+            TokenType::Static | TokenType::Inline | TokenType::Fn => self.parse_function(),
             _ => Err(ParseError::new(
                 format!("Expected function or constant definition, found {:?}", self.current_token.token_type),
                 self.current_token.start,
@@ -317,6 +317,8 @@ impl Parser {
     fn parse_block(&mut self) -> ParseResult<NodeRef> {
         let start_token_index = self.token_index;
 
+        let is_static = self.parse_static_flag();
+
         self.expect(TokenType::LeftBrace)?;
 
         // Check for optional block label: `{ label: statements... }`
@@ -388,7 +390,7 @@ impl Parser {
         }
 
         let statements_ref = self.ast.add_node_refs(&statements);
-        let block_node = Node::Block(IsStatic::No, block_id, statements_ref);
+        let block_node = Node::Block(is_static, block_id, statements_ref);
         Ok(self
             .ast
             .add_node(block_node, NodeInfo::new(start_token_index)))
@@ -398,22 +400,36 @@ impl Parser {
     fn parse_statement(&mut self) -> ParseResult<NodeRef> {
         match &self.current_token.token_type {
             // Statement-only forms
-            TokenType::Let => self.parse_variable_declaration(false, false),
-            TokenType::Const => self.parse_variable_declaration(true, false),
+            TokenType::Let => self.parse_variable_declaration(),
+            TokenType::Const => self.parse_variable_declaration(),
             TokenType::Return => self.parse_return_statement(),
             TokenType::Break => self.parse_jump_statement(),
             TokenType::Continue => self.parse_jump_statement(),
             TokenType::Static => {
-                self.advance();
-                match self.current_token.token_type {
-                    TokenType::Let => self.parse_variable_declaration(false, true),
-                    TokenType::Const => self.parse_variable_declaration(true, true),
+                match self.peek_next_token().token_type {
+                    TokenType::Let => self.parse_variable_declaration(),
+                    TokenType::Const => self.parse_variable_declaration(),
+                    TokenType::LeftBrace => self.parse_block(),
                     TokenType::Eof => Err(ParseError::new(
                         "Unexpected end of input after 'static'".to_string(),
                         self.current_token.start,
                     )),
                     _ => Err(ParseError::new(
                         "Expected 'let' or 'const' after 'static'".to_string(),
+                        self.current_token.start,
+                    )),
+                }
+            }
+            TokenType::Inline => {
+                match self.peek_next_token().token_type {
+                    TokenType::If => self.parse_if_statement(),
+                    TokenType::While => self.parse_while_statement(),
+                    TokenType::Eof => Err(ParseError::new(
+                        "Unexpected end of input after 'inline'".to_string(),
+                        self.current_token.start,
+                    )),
+                    _ => Err(ParseError::new(
+                        "Expected 'if' or 'while' after 'inline'".to_string(),
                         self.current_token.start,
                     )),
                 }
@@ -435,25 +451,23 @@ impl Parser {
         }
     }
 
-    fn parse_variable_declaration(&mut self, is_const: bool, is_static: bool) -> ParseResult<NodeRef> {
+    fn parse_variable_declaration(&mut self) -> ParseResult<NodeRef> {
         let start_token_index = self.token_index;
 
-        // Use the passed is_static flag, or check for static modifier if not already handled
-        let is_static = if is_static {
-            is_static
-        } else if self.current_token.token_type == TokenType::Static {
+        let is_static = self.parse_static_flag();
+        
+        let is_const = if self.current_token.token_type == TokenType::Const {
             self.advance();
             true
-        } else {
+        } else if self.current_token.token_type == TokenType::Let {
+            self.advance();
             false
-        };
-
-        // Expect either 'let' or 'const'
-        if is_const {
-            self.expect(TokenType::Const)?;
         } else {
-            self.expect(TokenType::Let)?;
-        }
+            return Err(ParseError::new(
+                "Expected 'let' or 'const'".to_string(),
+                self.current_token.start,
+            ))
+        };
 
         // Variable name
         let var_name = if let TokenType::Identifier = &self.current_token.token_type {
@@ -476,7 +490,7 @@ impl Parser {
         let local = Local {
             name: name_ref,
             is_param: false,
-            is_static,
+            is_static: is_static == IsStatic::Yes,
             is_const,
             ty: None,
         };
@@ -525,6 +539,8 @@ impl Parser {
     fn parse_if_statement(&mut self) -> ParseResult<NodeRef> {
         let start_token_index = self.token_index;
 
+        let is_inline = self.parse_inline_flag();
+
         self.expect(TokenType::If)?;
 
         let cond = self.parse_expression()?;
@@ -551,7 +567,7 @@ impl Parser {
             )
         };
 
-        let if_node = Node::If(IsStatic::No, IsInline::No, cond, then_block, else_block);
+        let if_node = Node::If(is_inline, cond, then_block, else_block);
         Ok(self.ast.add_node(if_node, NodeInfo::new(start_token_index)))
     }
 
@@ -559,12 +575,14 @@ impl Parser {
     fn parse_while_statement(&mut self) -> ParseResult<NodeRef> {
         let start_token_index = self.token_index;
 
+        let is_inline = self.parse_inline_flag();
+
         self.expect(TokenType::While)?;
 
         let cond = self.parse_expression()?;
         let body = self.parse_block()?;
 
-        let while_node = Node::While(IsStatic::No, IsInline::No, cond, body);
+        let while_node = Node::While(is_inline, cond, body);
         Ok(self
             .ast
             .add_node(while_node, NodeInfo::new(start_token_index)))
@@ -1448,5 +1466,97 @@ mod tests {
         // Test break/continue with values
         roundtrip("fn main() { { loop: break loop 42; } }");
         roundtrip("fn main() { while true { break 42; continue false; } }");
+    }
+
+    #[test]
+    fn test_inline_if_while() {
+        // Test inline if statements
+        roundtrip("fn main() { inline if true { let x = 1; } }");
+        roundtrip("fn main() { inline if false { let x = 1; } else { let y = 2; } }");
+        
+        // Test inline while statements
+        roundtrip("fn main() { inline while true { break; } }");
+        
+        // Test nested inline constructs
+        roundtrip("fn main() { inline if true { inline while false { continue; } } }");
+    }
+
+    #[test]
+    fn test_static_blocks() {
+        // Test static blocks
+        roundtrip("fn main() { static { let x = 1; } }");
+        roundtrip("fn main() { static { loop: break loop; } }");
+        
+        // Test static blocks with labels
+        roundtrip("fn main() { static { outer: { inner: break outer; } } }");
+    }
+
+    #[test]
+    fn test_mixed_inline_static() {
+        // Test combinations of inline and static
+        roundtrip("fn main() { inline if true { static { let x = 1; } } }");
+        roundtrip("fn main() { inline while true { static { break; } } }");
+    }
+
+    #[test]
+    fn test_variable_declaration_forms() {
+        // Test all variable declaration forms
+        roundtrip("fn main() { let x = 1; }");
+        roundtrip("fn main() { const x = 1; }");
+        roundtrip("fn main() { static let x = 1; }");
+        roundtrip("fn main() { static const x = 1; }");
+    }
+
+    #[test]
+    fn test_assignment_vs_expression() {
+        // Test that assignment is distinguished from expression
+        roundtrip("fn main() { let x = 1; x = 2; }");
+        roundtrip("fn main() { let x = 1; let y = x; }");
+        
+        // Test complex assignments
+        roundtrip("fn main() { let x = 1; x = x + 1; }");
+    }
+
+    #[test]
+    fn test_empty_labeled_blocks() {
+        // Test empty labeled blocks
+        roundtrip("fn main() { { loop: } }");
+        roundtrip("fn main() { static { empty: } }");
+    }
+
+    #[test]
+    fn test_nested_inline_static() {
+        // Test deeply nested combinations
+        roundtrip("fn main() { inline if true { static { inline while false { break; } } } }");
+    }
+
+    #[test]
+    fn test_break_continue_edge_cases() {
+        // Test break/continue with complex expressions (parentheses dropped when not needed)
+        roundtrip("fn main() { { loop: break loop 1 + 2 * 3; } }");
+        roundtrip("fn main() { while true { continue 1 == 2; } }");
+        
+        // Test nested blocks with different labels
+        roundtrip("fn main() { { a: { b: { c: break a; } } } }");
+    }
+
+    #[test]
+    fn test_label_error_handling() {
+        // Test undefined label error
+        let result = Parser::parse("fn main() { break undefined_label; }");
+        assert!(result.is_err());
+        
+        let result = Parser::parse("fn main() { continue nonexistent; }");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_static_inline_parsing_edge_cases() {
+        // Test that static/inline require proper following tokens
+        let result = Parser::parse("fn main() { static }");
+        assert!(result.is_err());
+        
+        let result = Parser::parse("fn main() { inline }");
+        assert!(result.is_err());
     }
 }
