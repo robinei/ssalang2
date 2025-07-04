@@ -171,17 +171,8 @@ impl Parser {
     fn parse_function(&mut self) -> ParseResult<NodeRef> {
         let start_token_index = self.token_index;
 
-        let mut flags = Flags::new();
-
-        if self.current_token.token_type == TokenType::Static {
-            flags.set_is_static(true);
-            self.advance();
-        }
-
-        if self.current_token.token_type == TokenType::Inline {
-            flags.set_is_inline(true);
-            self.advance();
-        }
+        let is_static = self.parse_static_flag();
+        let is_inline = self.parse_inline_flag();
 
         self.expect(TokenType::Fn)?;
 
@@ -192,7 +183,7 @@ impl Parser {
             self.advance();
 
             // Parse the function value
-            let func_value = self.parse_function_value(flags)?;
+            let func_value = self.parse_function_value(is_static, is_inline)?;
 
             // Create a local binding for the function name
             let local = Local {
@@ -206,11 +197,11 @@ impl Parser {
             self.create_function_definition(local, func_value, start_token_index)
         } else {
             // Anonymous function: fn() {}
-            self.parse_function_value(flags)
+            self.parse_function_value(is_static, is_inline)
         }
     }
 
-    fn parse_function_value(&mut self, flags: Flags) -> ParseResult<NodeRef> {
+    fn parse_function_value(&mut self, is_static: IsStatic, is_inline: IsInline) -> ParseResult<NodeRef> {
         let start_token_index = self.token_index;
 
         let function_scope_id = self.enter_scope();
@@ -251,7 +242,7 @@ impl Parser {
         // Exit function scope
         self.exit_scope(function_scope_id);
 
-        let func_node = Node::Func(flags, function_scope_id, body, return_type);
+        let func_node = Node::Func(is_static, is_inline, function_scope_id, body, return_type);
         Ok(self
             .ast
             .add_node(func_node, NodeInfo::new(start_token_index)))
@@ -331,7 +322,6 @@ impl Parser {
         self.expect(TokenType::LeftBrace)?;
 
         let block_id = self.enter_block();
-        let flags = Flags::new();
 
         // Parse all statements in the block
         let mut statements: SmallVec<[NodeRef; 64]> = SmallVec::new();
@@ -358,7 +348,7 @@ impl Parser {
         self.exit_block(block_id);
 
         let statements_ref = self.ast.add_node_refs(&statements);
-        let block_node = Node::Block(flags, block_id, statements_ref);
+        let block_node = Node::Block(IsStatic::No, block_id, statements_ref);
         Ok(self
             .ast
             .add_node(block_node, NodeInfo::new(start_token_index)))
@@ -511,19 +501,17 @@ impl Parser {
             }
         } else {
             // No else clause - create block with unit value
-            let flags = Flags::new();
             let unit_node = self
                 .ast
                 .add_node(Node::ConstUnit, NodeInfo::new(self.token_index));
             let statements_ref = self.ast.add_node_refs(&[unit_node]);
             self.ast.add_node(
-                Node::Block(flags, 0, statements_ref),
+                Node::Block(IsStatic::No, 0, statements_ref),
                 NodeInfo::new(self.token_index),
             )
         };
 
-        let flags = Flags::new();
-        let if_node = Node::If(flags, cond, then_block, else_block);
+        let if_node = Node::If(IsStatic::No, IsInline::No, cond, then_block, else_block);
         Ok(self.ast.add_node(if_node, NodeInfo::new(start_token_index)))
     }
 
@@ -536,8 +524,7 @@ impl Parser {
         let cond = self.parse_expression()?;
         let body = self.parse_block()?;
 
-        let flags = Flags::new();
-        let while_node = Node::While(flags, cond, body);
+        let while_node = Node::While(IsStatic::No, IsInline::No, cond, body);
         Ok(self
             .ast
             .add_node(while_node, NodeInfo::new(start_token_index)))
@@ -582,8 +569,7 @@ impl Parser {
 
         self.expect(TokenType::Semicolon)?;
 
-        let flags = Flags::new();
-        let break_node = Node::Break(flags, 0, value);
+        let break_node = Node::Break(IsStatic::No, 0, value);
         Ok(self
             .ast
             .add_node(break_node, NodeInfo::new(start_token_index)))
@@ -605,8 +591,7 @@ impl Parser {
 
         self.expect(TokenType::Semicolon)?;
 
-        let flags = Flags::new();
-        let continue_node = Node::Continue(flags, 0, value);
+        let continue_node = Node::Continue(IsStatic::No, 0, value);
         Ok(self
             .ast
             .add_node(continue_node, NodeInfo::new(start_token_index)))
@@ -829,6 +814,28 @@ impl Parser {
             let start = token.start as usize;
             let end = start + token.length as usize;
             &self.source[start..end]
+        }
+    }
+
+    // Flag parsing helpers
+    
+    /// Parse static flag, advancing if present
+    fn parse_static_flag(&mut self) -> IsStatic {
+        if self.current_token.token_type == TokenType::Static {
+            self.advance();
+            IsStatic::Yes
+        } else {
+            IsStatic::No
+        }
+    }
+    
+    /// Parse inline flag, advancing if present  
+    fn parse_inline_flag(&mut self) -> IsInline {
+        if self.current_token.token_type == TokenType::Inline {
+            self.advance();
+            IsInline::Yes
+        } else {
+            IsInline::No
         }
     }
 

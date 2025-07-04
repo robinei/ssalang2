@@ -1,4 +1,4 @@
-use crate::{ast::{Ast, Node, NodeRef, TypeAtom, ScopeIndex}, lexer::{Token, TokenType}};
+use crate::{ast::{Ast, Node, NodeRef, TypeAtom, ScopeIndex, IsStatic, IsInline}, lexer::{Token, TokenType}};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PrintMode {
@@ -247,8 +247,8 @@ impl<'a> PrettyPrinter<'a> {
                 self.emit_token(TokenType::Identifier, func_name);
                 
                 // Delegate to shared function printing logic
-                if let Node::Func(flags, scope_index, body, return_type) = self.ast.get_node(*func_node) {
-                    if flags.is_inline() {
+                if let Node::Func(_is_static, is_inline, scope_index, body, return_type) = self.ast.get_node(*func_node) {
+                    if *is_inline == IsInline::Yes {
                         // Note: inline flag should be on the DefineFn, but for now check the Func
                         // This might need adjustment based on how flags are handled
                     }
@@ -284,12 +284,9 @@ impl<'a> PrettyPrinter<'a> {
                 let var_name = self.ast.get_local_name(*local_index);
                 self.emit_token(TokenType::Identifier, var_name);
             }
-            Node::Block(flags, _scope_index, nodes_ref) => {
-                if flags.is_static() {
+            Node::Block(is_static, _scope_index, nodes_ref) => {
+                if *is_static == IsStatic::Yes {
                     self.emit_token(TokenType::Static, "static ");
-                }
-                if flags.is_inline() {
-                    self.emit_token(TokenType::Inline, "inline ");
                 }
 
                 let nodes = self.ast.get_node_refs(*nodes_ref);
@@ -316,11 +313,11 @@ impl<'a> PrettyPrinter<'a> {
                     self.emit_token(TokenType::RightBrace, "}");
                 }
             }
-            Node::If(flags, cond, then_branch, else_branch) => {
-                if flags.is_static() {
+            Node::If(is_static, is_inline, cond, then_branch, else_branch) => {
+                if *is_static == IsStatic::Yes {
                     self.emit_token(TokenType::Static, "static ");
                 }
-                if flags.is_inline() {
+                if *is_inline == IsInline::Yes {
                     self.emit_token(TokenType::Inline, "inline ");
                 }
 
@@ -342,11 +339,11 @@ impl<'a> PrettyPrinter<'a> {
                     self.print_node(*else_branch);
                 }
             }
-            Node::While(flags, cond, body) => {
-                if flags.is_static() {
+            Node::While(is_static, is_inline, cond, body) => {
+                if *is_static == IsStatic::Yes {
                     self.emit_token(TokenType::Static, "static ");
                 }
-                if flags.is_inline() {
+                if *is_inline == IsInline::Yes {
                     self.emit_token(TokenType::Inline, "inline ");
                 }
 
@@ -357,7 +354,7 @@ impl<'a> PrettyPrinter<'a> {
                 // Handle body (always a Block)
                 self.print_node(*body);
             }
-            Node::Break(_flags, _scope_index, value) => {
+            Node::Break(_is_static, _scope_index, value) => {
                 if self.is_unit_value(*value) {
                     self.emit_token(TokenType::Break, "break");
                     self.emit_token(TokenType::Semicolon, ";");
@@ -367,7 +364,7 @@ impl<'a> PrettyPrinter<'a> {
                     self.emit_token(TokenType::Semicolon, ";");
                 }
             }
-            Node::Continue(_flags, _scope_index, value) => {
+            Node::Continue(_is_static, _scope_index, value) => {
                 if self.is_unit_value(*value) {
                     self.emit_token(TokenType::Continue, "continue");
                     self.emit_token(TokenType::Semicolon, ";");
@@ -382,11 +379,11 @@ impl<'a> PrettyPrinter<'a> {
                 self.print_expression(*value);
                 self.emit_token(TokenType::Semicolon, ";");
             }
-            Node::Func(flags, scope_index, body, return_type) => {
-                if flags.is_static() {
+            Node::Func(is_static, is_inline, scope_index, body, return_type) => {
+                if *is_static == IsStatic::Yes {
                     self.emit_token(TokenType::Static, "static ");
                 }
-                if flags.is_inline() {
+                if *is_inline == IsInline::Yes {
                     self.emit_token(TokenType::Inline, "inline ");
                 }
 
@@ -557,7 +554,7 @@ impl<'a> PrettyPrinter<'a> {
     }
 
     fn is_if_node(&self, node_ref: NodeRef) -> bool {
-        matches!(self.ast.get_node(node_ref), Node::If(_, _, _, _))
+        matches!(self.ast.get_node(node_ref), Node::If(_, _, _, _, _))
     }
 
     fn is_empty_or_unit_only_block(&self, node_ref: NodeRef) -> bool {

@@ -95,42 +95,20 @@ impl NodesRef {
     }
 }
 
-// Flags for packing boolean values across all AST node types
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Flags(u8);
-
-impl Flags {
-    const IS_STATIC: u8 = 0x01; // Block, If, While, Break, Continue, Func: is_static
-    const IS_INLINE: u8 = 0x02; // If, While, Func: is_inline
-
-    pub fn new() -> Self {
-        Self(0)
-    }
-
-    pub fn is_static(self) -> bool {
-        (self.0 & Self::IS_STATIC) != 0
-    }
-
-    pub fn set_is_static(&mut self, value: bool) {
-        if value {
-            self.0 |= Self::IS_STATIC;
-        } else {
-            self.0 &= !Self::IS_STATIC;
-        }
-    }
-
-    pub fn is_inline(self) -> bool {
-        (self.0 & Self::IS_INLINE) != 0
-    }
-
-    pub fn set_is_inline(&mut self, value: bool) {
-        if value {
-            self.0 |= Self::IS_INLINE;
-        } else {
-            self.0 &= !Self::IS_INLINE;
-        }
-    }
+#[repr(u8)]
+pub enum IsInline {
+    No,
+    Yes
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u8)]
+pub enum IsStatic {
+    No,
+    Yes
+}
+
 
 // Separate enum for type atoms
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -178,17 +156,17 @@ pub enum Node {
     LocalRead(LocalRef),           // local_ref
 
     // Control flow nodes
-    Block(Flags, BlockIndex, NodesRef), // flags, block_index, nodes
-    If(Flags, NodeRef, NodeRef, NodeRef),    // flags, cond, then, els
-    While(Flags, NodeRef, NodeRef),          // flags, cond, body
+    Block(IsStatic, BlockIndex, NodesRef), // is_static, block_index, nodes
+    If(IsStatic, IsInline, NodeRef, NodeRef, NodeRef),    // is_static, is_inline, cond, then, els
+    While(IsStatic, IsInline, NodeRef, NodeRef),          // is_static, is_inline, cond, body
 
     // Jump nodes
-    Break(Flags, BlockIndex, NodeRef), // flags, block_index, value
-    Continue(Flags, BlockIndex, NodeRef), // flags, block_index, value
+    Break(IsStatic, BlockIndex, NodeRef), // is_static, block_index, value
+    Continue(IsStatic, BlockIndex, NodeRef), // is_static, block_index, value
     Return(NodeRef),                   // value_node
 
     // Function node
-    Func(Flags, ScopeIndex, NodeRef, NodeRef), // flags, scope_index, body, return_type
+    Func(IsStatic, IsInline, ScopeIndex, NodeRef, NodeRef), // is_static, is_inline, scope_index, body, return_type
 
     // Module node
     Module(ScopeIndex, NodesRef), // scope_index, nodes
