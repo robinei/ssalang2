@@ -188,6 +188,12 @@ pub struct Scope {
     pub parent: Option<ScopeIndex>,  // For nested functions later
 }
 
+// Block for control flow with optional label
+#[derive(Debug, Clone)]
+pub struct Block {
+    pub name: Option<SymbolRef>,  // Optional block label
+}
+
 // Separate structure for local variable metadata (used in function contexts)
 #[derive(Debug, Clone)]
 pub struct Local {
@@ -208,6 +214,7 @@ pub struct Ast {
     symbols: Vec<String>,     // Symbol storage for identifiers (interned)
     symbol_map: std::collections::HashMap<String, SymbolRef>, // For symbol interning
     scopes: Vec<Scope>,       // All function scopes
+    blocks: Vec<Block>,       // All blocks
     root: Option<NodeRef>,    // Root node of the tree
 }
 
@@ -222,6 +229,7 @@ impl Ast {
             symbols: Vec::new(),
             symbol_map: std::collections::HashMap::new(),
             scopes: Vec::new(),
+            blocks: Vec::new(),
             root: None,
         }
     }
@@ -312,6 +320,21 @@ impl Ast {
 
     pub fn get_scope_mut(&mut self, scope_index: ScopeIndex) -> &mut Scope {
         &mut self.scopes[scope_index as usize]
+    }
+
+    // Block management methods
+    pub fn add_block(&mut self, block: Block) -> BlockIndex {
+        let block_index = self.blocks.len() as BlockIndex;
+        self.blocks.push(block);
+        block_index
+    }
+
+    pub fn get_block(&self, block_index: BlockIndex) -> &Block {
+        &self.blocks[block_index as usize]
+    }
+
+    pub fn get_block_mut(&mut self, block_index: BlockIndex) -> &mut Block {
+        &mut self.blocks[block_index as usize]
     }
 
     // Node reference storage methods

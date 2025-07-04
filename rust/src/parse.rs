@@ -21,7 +21,6 @@ pub struct Parser {
     // Scope management for local bindings
     binding_map: HashMap<SymbolRef, LocalRef>, // Current symbol -> local ref mappings
     cleanup_stack: Vec<ScopeCleanup>,            // Stack of cleanup operations
-    next_block_id: BlockIndex,                   // Counter for unique block IDs
     scope_stack: Vec<ScopeIndex>,                // Stack of currently active scope IDs
     block_stack: Vec<BlockIndex>,                // Stack of currently active block IDs
     
@@ -59,7 +58,6 @@ impl Parser {
             ast: Ast::new(),
             binding_map: HashMap::new(),
             cleanup_stack: Vec::new(),
-            next_block_id: 1, // Start block IDs at 1 (0 can be reserved for global/invalid)
             scope_stack: Vec::new(),
             block_stack: Vec::new(),
             function_locals: Vec::new(),
@@ -321,7 +319,22 @@ impl Parser {
 
         self.expect(TokenType::LeftBrace)?;
 
-        let block_id = self.enter_block();
+        // Check for optional block label: `{ label: statements... }`
+        let block_name = if self.current_token.token_type == TokenType::Identifier 
+            && self.peek_next_token().token_type == TokenType::Colon {
+            let name = self.get_token_text(&self.current_token).to_owned();
+            let name_ref = self.ast.intern_symbol(name);
+            self.advance(); // consume identifier
+            self.advance(); // consume colon
+            Some(name_ref)
+        } else {
+            None
+        };
+
+        // Create and register the block
+        let block = Block { name: block_name };
+        let block_id = self.ast.add_block(block);
+        self.block_stack.push(block_id);
 
         // Parse all statements in the block
         let mut statements: SmallVec<[NodeRef; 64]> = SmallVec::new();
@@ -345,7 +358,34 @@ impl Parser {
 
         self.expect(TokenType::RightBrace)?;
 
-        self.exit_block(block_id);
+        // Verify we're exiting the most recent block
+        if let Some(&top_block) = self.block_stack.last() {
+            assert_eq!(top_block, block_id, "Exiting block out of order");
+            self.block_stack.pop();
+        }
+
+        // Pop and apply cleanup operations until we've handled all for this block
+        while let Some(cleanup) = self.cleanup_stack.last() {
+            let cleanup_block = match cleanup {
+                ScopeCleanup::Delete(_, block) => *block,
+                ScopeCleanup::Replace(_, _, block) => *block,
+            };
+
+            if cleanup_block != block_id {
+                break; // We've finished this block's cleanup operations
+            }
+
+            // Remove and apply the cleanup operation
+            let cleanup = self.cleanup_stack.pop().unwrap();
+            match cleanup {
+                ScopeCleanup::Delete(symbol, _) => {
+                    self.binding_map.remove(&symbol);
+                }
+                ScopeCleanup::Replace(symbol, old_local_ref, _) => {
+                    self.binding_map.insert(symbol, old_local_ref);
+                }
+            }
+        }
 
         let statements_ref = self.ast.add_node_refs(&statements);
         let block_node = Node::Block(IsStatic::No, block_id, statements_ref);
@@ -361,8 +401,8 @@ impl Parser {
             TokenType::Let => self.parse_variable_declaration(false, false),
             TokenType::Const => self.parse_variable_declaration(true, false),
             TokenType::Return => self.parse_return_statement(),
-            TokenType::Break => self.parse_break_statement(),
-            TokenType::Continue => self.parse_continue_statement(),
+            TokenType::Break => self.parse_jump_statement(),
+            TokenType::Continue => self.parse_jump_statement(),
             TokenType::Static => {
                 self.advance();
                 match self.current_token.token_type {
@@ -554,47 +594,40 @@ impl Parser {
     }
 
     // Parse break statement
-    fn parse_break_statement(&mut self) -> ParseResult<NodeRef> {
+    // Helper to parse break/continue statements
+    fn parse_jump_statement(&mut self) -> ParseResult<NodeRef> {
         let start_token_index = self.token_index;
+        let is_break = self.current_token.token_type == TokenType::Break;
+        self.advance();
 
-        self.expect(TokenType::Break)?;
+        // Check for optional label - if next token is identifier, assume it's a label
+        let target_block = if self.current_token.token_type == TokenType::Identifier {
+            // This is a label
+            let label = self.get_token_text(&self.current_token).to_owned();
+            let label_ref = self.ast.intern_symbol(label);
+            self.advance();
+            self.find_labeled_block(label_ref)?
+        } else {
+            // Default to current block
+            *self.block_stack.last().unwrap_or(&0)
+        };
 
         let value = if self.current_token.token_type == TokenType::Semicolon {
-            // Break with unit
-            self.ast
-                .add_node(Node::ConstUnit, NodeInfo::new(self.token_index))
+            // Jump with unit value
+            self.ast.add_node(Node::ConstUnit, NodeInfo::new(self.token_index))
         } else {
             self.parse_expression()?
         };
 
         self.expect(TokenType::Semicolon)?;
 
-        let break_node = Node::Break(0, value);
-        Ok(self
-            .ast
-            .add_node(break_node, NodeInfo::new(start_token_index)))
-    }
-
-    // Parse continue statement
-    fn parse_continue_statement(&mut self) -> ParseResult<NodeRef> {
-        let start_token_index = self.token_index;
-
-        self.expect(TokenType::Continue)?;
-
-        let value = if self.current_token.token_type == TokenType::Semicolon {
-            // Continue with unit
-            self.ast
-                .add_node(Node::ConstUnit, NodeInfo::new(self.token_index))
+        let node = if is_break {
+            Node::Break(target_block, value)
         } else {
-            self.parse_expression()?
+            Node::Continue(target_block, value)
         };
-
-        self.expect(TokenType::Semicolon)?;
-
-        let continue_node = Node::Continue(0, value);
-        Ok(self
-            .ast
-            .add_node(continue_node, NodeInfo::new(start_token_index)))
+        
+        Ok(self.ast.add_node(node, NodeInfo::new(start_token_index)))
     }
 
     // Parse expression using precedence climbing
@@ -841,44 +874,21 @@ impl Parser {
 
     // Scope management methods
 
-    /// Enter a new block scope and return its unique ID
-    fn enter_block(&mut self) -> BlockIndex {
-        let block_id = self.next_block_id;
-        self.next_block_id += 1;
-        self.block_stack.push(block_id);
-        block_id
-    }
-
-    /// Exit a block by applying all cleanup operations for that block
-    fn exit_block(&mut self, block_id: BlockIndex) {
-        // Verify we're exiting the most recent block
-        if let Some(&top_block) = self.block_stack.last() {
-            assert_eq!(top_block, block_id, "Exiting block out of order");
-            self.block_stack.pop();
-        }
-
-        // Pop and apply cleanup operations until we've handled all for this block
-        while let Some(cleanup) = self.cleanup_stack.last() {
-            let cleanup_block = match cleanup {
-                ScopeCleanup::Delete(_, block) => *block,
-                ScopeCleanup::Replace(_, _, block) => *block,
-            };
-
-            if cleanup_block != block_id {
-                break; // We've finished this block's cleanup operations
-            }
-
-            // Remove and apply the cleanup operation
-            let cleanup = self.cleanup_stack.pop().unwrap();
-            match cleanup {
-                ScopeCleanup::Delete(symbol, _) => {
-                    self.binding_map.remove(&symbol);
-                }
-                ScopeCleanup::Replace(symbol, old_local_ref, _) => {
-                    self.binding_map.insert(symbol, old_local_ref);
+    /// Find a labeled block by walking up the block stack
+    fn find_labeled_block(&self, label: SymbolRef) -> ParseResult<BlockIndex> {
+        // Walk up block stack to find matching label
+        for &block_index in self.block_stack.iter().rev() {
+            let block = self.ast.get_block(block_index);
+            if let Some(block_name) = block.name {
+                if block_name == label {
+                    return Ok(block_index);
                 }
             }
         }
+        Err(ParseError::new(
+            format!("Undefined block label: {}", self.ast.get_symbol(label)),
+            self.current_token.start,
+        ))
     }
 
     /// Enter a new function scope and return its unique ID
@@ -1418,5 +1428,25 @@ mod tests {
     fn test_module_static_const_and_function() {
         // Test module with static constant and function
         roundtrip("const MAX_SIZE = 100; fn calculate() -> i32 { MAX_SIZE }");
+    }
+
+
+    #[test]
+    fn test_labeled_blocks() {
+        // Test basic labeled block
+        roundtrip("fn main() { { loop: break loop; } }");
+        
+        // Test unlabeled break/continue still work
+        roundtrip("fn main() { while true { break; continue; } }");
+        
+        // Test nested labeled blocks
+        roundtrip("fn main() { { outer: { inner: break outer; } } }");
+        
+        // Test mixed labeled and unlabeled
+        roundtrip("fn main() { { outer: while true { break outer; continue; } } }");
+        
+        // Test break/continue with values
+        roundtrip("fn main() { { loop: break loop 42; } }");
+        roundtrip("fn main() { while true { break 42; continue false; } }");
     }
 }

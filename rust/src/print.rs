@@ -284,18 +284,32 @@ impl<'a> PrettyPrinter<'a> {
                 let var_name = self.ast.get_local_name(*local_index);
                 self.emit_token(TokenType::Identifier, var_name);
             }
-            Node::Block(is_static, _scope_index, nodes_ref) => {
+            Node::Block(is_static, block_index, nodes_ref) => {
                 if *is_static == IsStatic::Yes {
                     self.emit_token(TokenType::Static, "static ");
                 }
 
+                let block = self.ast.get_block(*block_index);
                 let nodes = self.ast.get_node_refs(*nodes_ref);
 
                 if nodes.is_empty() || nodes.len() == 1 && self.is_unit_value(nodes[0]) {
                     self.emit_token(TokenType::LeftBrace, "{ ");
+                    // Print optional label for empty blocks
+                    if let Some(name_ref) = block.name {
+                        let name = self.ast.get_symbol(name_ref);
+                        self.emit_token(TokenType::Identifier, name);
+                        self.emit_token(TokenType::Colon, ": ");
+                    }
                     self.emit_token(TokenType::RightBrace, "}");
                 } else {
                     self.emit_token(TokenType::LeftBrace, "{");
+                    // Print optional label at start of block
+                    if let Some(name_ref) = block.name {
+                        self.buffer.push(' ');
+                        let name = self.ast.get_symbol(name_ref);
+                        self.emit_token(TokenType::Identifier, name);
+                        self.emit_token(TokenType::Colon, ":");
+                    }
                     self.write_newline();
                     self.indent += 1;
                     for (i, &node) in nodes.iter().enumerate() {
@@ -354,25 +368,37 @@ impl<'a> PrettyPrinter<'a> {
                 // Handle body (always a Block)
                 self.print_node(*body);
             }
-            Node::Break(_scope_index, value) => {
-                if self.is_unit_value(*value) {
-                    self.emit_token(TokenType::Break, "break");
-                    self.emit_token(TokenType::Semicolon, ";");
-                } else {
-                    self.emit_token(TokenType::Break, "break ");
-                    self.print_expression(*value);
-                    self.emit_token(TokenType::Semicolon, ";");
+            Node::Break(block_index, value) => {
+                self.emit_token(TokenType::Break, "break");
+                
+                // Check if the block has a label
+                let block = self.ast.get_block(*block_index);
+                if let Some(label_ref) = block.name {
+                    let label = self.ast.get_symbol(label_ref);
+                    self.emit_token(TokenType::Identifier, &format!(" {}", label));
                 }
+                
+                if !self.is_unit_value(*value) {
+                    self.buffer.push(' ');
+                    self.print_expression(*value);
+                }
+                self.emit_token(TokenType::Semicolon, ";");
             }
-            Node::Continue(_scope_index, value) => {
-                if self.is_unit_value(*value) {
-                    self.emit_token(TokenType::Continue, "continue");
-                    self.emit_token(TokenType::Semicolon, ";");
-                } else {
-                    self.emit_token(TokenType::Continue, "continue ");
-                    self.print_expression(*value);
-                    self.emit_token(TokenType::Semicolon, ";");
+            Node::Continue(block_index, value) => {
+                self.emit_token(TokenType::Continue, "continue");
+                
+                // Check if the block has a label
+                let block = self.ast.get_block(*block_index);
+                if let Some(label_ref) = block.name {
+                    let label = self.ast.get_symbol(label_ref);
+                    self.emit_token(TokenType::Identifier, &format!(" {}", label));
                 }
+                
+                if !self.is_unit_value(*value) {
+                    self.buffer.push(' ');
+                    self.print_expression(*value);
+                }
+                self.emit_token(TokenType::Semicolon, ";");
             }
             Node::Return(value) => {
                 self.emit_token(TokenType::Return, "return ");
