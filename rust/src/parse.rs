@@ -569,7 +569,7 @@ impl Parser {
 
         self.expect(TokenType::Semicolon)?;
 
-        let break_node = Node::Break(IsStatic::No, 0, value);
+        let break_node = Node::Break(0, value);
         Ok(self
             .ast
             .add_node(break_node, NodeInfo::new(start_token_index)))
@@ -591,7 +591,7 @@ impl Parser {
 
         self.expect(TokenType::Semicolon)?;
 
-        let continue_node = Node::Continue(IsStatic::No, 0, value);
+        let continue_node = Node::Continue(0, value);
         Ok(self
             .ast
             .add_node(continue_node, NodeInfo::new(start_token_index)))
@@ -919,7 +919,7 @@ impl Parser {
         };
 
         // Update the scope's locals_ref
-        self.ast.update_scope_locals(scope_id, locals_ref);
+        self.ast.get_scope_mut(scope_id).locals = locals_ref;
         
         // Truncate function_locals back to where this scope started
         self.function_locals.truncate(locals_start);

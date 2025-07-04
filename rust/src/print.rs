@@ -354,7 +354,7 @@ impl<'a> PrettyPrinter<'a> {
                 // Handle body (always a Block)
                 self.print_node(*body);
             }
-            Node::Break(_is_static, _scope_index, value) => {
+            Node::Break(_scope_index, value) => {
                 if self.is_unit_value(*value) {
                     self.emit_token(TokenType::Break, "break");
                     self.emit_token(TokenType::Semicolon, ";");
@@ -364,7 +364,7 @@ impl<'a> PrettyPrinter<'a> {
                     self.emit_token(TokenType::Semicolon, ";");
                 }
             }
-            Node::Continue(_is_static, _scope_index, value) => {
+            Node::Continue(_scope_index, value) => {
                 if self.is_unit_value(*value) {
                     self.emit_token(TokenType::Continue, "continue");
                     self.emit_token(TokenType::Semicolon, ";");
@@ -581,7 +581,7 @@ impl<'a> PrettyPrinter<'a> {
     fn print_function_signature_and_body(&mut self, scope_index: ScopeIndex, body: NodeRef, return_type: NodeRef) {
         self.emit_token(TokenType::LeftParen, "(");
         
-        for (i, local) in self.ast.get_locals(scope_index).iter().enumerate() {
+        for (i, local) in self.ast.get_scope_locals(scope_index).iter().enumerate() {
             if !local.is_param {
                 break;
             }

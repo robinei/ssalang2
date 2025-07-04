@@ -14,9 +14,6 @@ impl LocalRef {
     }
 }
 
-// Keep LocalIndex as alias for compatibility
-pub type LocalIndex = LocalRef;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct NodeRef(u32);
 
@@ -161,8 +158,8 @@ pub enum Node {
     While(IsStatic, IsInline, NodeRef, NodeRef),          // is_static, is_inline, cond, body
 
     // Jump nodes
-    Break(IsStatic, BlockIndex, NodeRef), // is_static, block_index, value
-    Continue(IsStatic, BlockIndex, NodeRef), // is_static, block_index, value
+    Break(BlockIndex, NodeRef), // block_index, value
+    Continue(BlockIndex, NodeRef), // block_index, value
     Return(NodeRef),                   // value_node
 
     // Function node
@@ -203,10 +200,10 @@ pub struct Local {
 
 // AST that owns all associated data including the tree structure itself
 pub struct Ast {
-    nodes: Vec<Node>,                                         // All AST nodes
+    nodes: Vec<Node>,         // All AST nodes
     node_info: Vec<NodeInfo>, // Per-node metadata (source location, etc.)
     locals: Vec<Local>,       // Flat array of all locals across all functions
-    node_refs: Vec<NodeRef>, // Flat array of all node references in blocks and modules
+    node_refs: Vec<NodeRef>,  // Flat array of all node references in blocks and modules
     strings: Vec<String>,     // String storage for string literals
     symbols: Vec<String>,     // Symbol storage for identifiers (interned)
     symbol_map: std::collections::HashMap<String, SymbolRef>, // For symbol interning
@@ -277,20 +274,19 @@ impl Ast {
         LocalsRef::new(offset, count)
     }
 
-    pub fn get_locals_by_ref(&self, locals_ref: LocalsRef) -> &[Local] {
+    pub fn get_locals(&self, locals_ref: LocalsRef) -> &[Local] {
         let start = locals_ref.offset as usize;
         let end = start + (locals_ref.count as usize);
         &self.locals[start..end]
     }
 
-    pub fn get_locals(&self, scope_index: ScopeIndex) -> &[Local] {
+    pub fn get_scope_locals(&self, scope_index: ScopeIndex) -> &[Local] {
         let scope = &self.scopes[scope_index as usize];
-        self.get_locals_by_ref(scope.locals)
+        self.get_locals(scope.locals)
     }
 
     pub fn get_local(&self, local_ref: LocalRef) -> &Local {
-        let scope = &self.scopes[local_ref.scope as usize];
-        let locals = self.get_locals_by_ref(scope.locals);
+        let locals = self.get_scope_locals(local_ref.scope);
         &locals[local_ref.index as usize]
     }
 
@@ -314,8 +310,8 @@ impl Ast {
         &self.scopes[scope_index as usize]
     }
 
-    pub fn update_scope_locals(&mut self, scope_index: ScopeIndex, locals_ref: LocalsRef) {
-        self.scopes[scope_index as usize].locals = locals_ref;
+    pub fn get_scope_mut(&mut self, scope_index: ScopeIndex) -> &mut Scope {
+        &mut self.scopes[scope_index as usize]
     }
 
     // Node reference storage methods
