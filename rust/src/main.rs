@@ -1,4 +1,4 @@
-use ssalang2::print::PrettyPrinter;
+use ssalang2::astprint::AstPrinter;
 use ssalang2::parse::{Parser, ParseError};
 use ssalang2::lexer::Lexer;
 use std::env;
@@ -101,7 +101,7 @@ fn main() {
     };
     
     // Format the code with comment/formatting preservation
-    let formatter = PrettyPrinter::new_reformat(&ast, &tokens, &source_code, 4);
+    let formatter = AstPrinter::new_reformat(&ast, &tokens, &source_code, 4);
     let formatted_code = formatter.print();
     
     // Output the formatted code

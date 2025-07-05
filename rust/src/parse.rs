@@ -1030,12 +1030,12 @@ impl Parser {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::print::PrettyPrinter;
+    use crate::astprint::AstPrinter;
 
     fn roundtrip(input: &str) {
         // NEVER fix tests by changing this function - fix the implementations that we are testing
         let ast = Parser::parse(input).unwrap();
-        let printer = PrettyPrinter::new_generate(&ast, 0);
+        let printer = AstPrinter::new_generate(&ast, 0);
         let output = printer.print();
         assert_eq!(input, output);
     }
@@ -1043,7 +1043,7 @@ mod tests {
     fn parse_prints_as(input: &str, expected_output: &str) {
         // Test cases where input parses correctly but prints in normalized form
         let ast = Parser::parse(input).unwrap();
-        let printer = PrettyPrinter::new_generate(&ast, 0);
+        let printer = AstPrinter::new_generate(&ast, 0);
         let output = printer.print();
         assert_eq!(expected_output, output);
     }
@@ -1419,7 +1419,7 @@ mod tests {
     fn debug_two_module_consts() {
         let input = "const PI = 42; const E = 27;";
         let ast = Parser::parse(input).unwrap();
-        let printer = PrettyPrinter::new_generate(&ast, 0);
+        let printer = AstPrinter::new_generate(&ast, 0);
         let output = printer.print();
         assert_eq!(input, output);
     }
@@ -1428,7 +1428,7 @@ mod tests {
     fn debug_module_const_and_simple_function() {
         let input = "const PI = 42; fn main() { let x = 1; }";
         let ast = Parser::parse(input).unwrap();
-        let printer = PrettyPrinter::new_generate(&ast, 0);
+        let printer = AstPrinter::new_generate(&ast, 0);
         let output = printer.print();
         assert_eq!(input, output);
     }

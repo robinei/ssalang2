@@ -6,7 +6,7 @@ enum PrintMode {
     Generate,    // Clean generation, no formatting tokens
 }
 
-pub struct PrettyPrinter<'a> {
+pub struct AstPrinter<'a> {
     ast: &'a Ast,
     mode: PrintMode,
     tokens: Option<&'a [Token]>,
@@ -17,7 +17,7 @@ pub struct PrettyPrinter<'a> {
     buffer: String,
 }
 
-impl<'a> PrettyPrinter<'a> {
+impl<'a> AstPrinter<'a> {
     pub fn new_reformat(ast: &'a Ast, tokens: &'a [Token], source: &'a str, indent_size: usize) -> Self {
         Self {
             ast,
@@ -644,7 +644,7 @@ mod tests {
         let mut lexer = crate::lexer::Lexer::new(input);
         let tokens = lexer.tokenize();
         let ast = Parser::parse(input).unwrap();
-        let printer = PrettyPrinter::new_reformat(&ast, &tokens, input, 4);
+        let printer = AstPrinter::new_reformat(&ast, &tokens, input, 4);
         let output = printer.print();
         assert_eq!(expected_output, output);
     }
