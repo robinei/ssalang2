@@ -3,9 +3,9 @@ use crate::lexer::{Lexer, Token, TokenType};
 use smallvec::SmallVec;
 use std::collections::HashMap;
 
-// Cleanup operations for scope management
+// Cleanup operations for func management
 #[derive(Debug, Clone)]
-enum ScopeCleanup {
+enum CleanupAction {
     Delete(SymbolRef, BlockIndex), // Remove binding when exiting block
     Replace(SymbolRef, LocalRef, BlockIndex), // Restore shadowed binding when exiting block
 }
@@ -18,16 +18,16 @@ pub struct Parser {
     source: String,
     ast: Ast,
 
-    // Scope management for local bindings
+    // Func management for local bindings
     binding_map: HashMap<SymbolRef, LocalRef>, // Current symbol -> local ref mappings
-    cleanup_stack: Vec<ScopeCleanup>,            // Stack of cleanup operations
-    scope_stack: Vec<ScopeIndex>,                // Stack of currently active scope IDs
+    cleanup_stack: Vec<CleanupAction>,            // Stack of cleanup operations
+    func_stack: Vec<FuncIndex>,                // Stack of currently active func IDs
     block_stack: Vec<BlockIndex>,                // Stack of currently active block IDs
     
     // Function local collection
-    function_locals: Vec<Local>,                 // Stack of locals for current scope being parsed
-    current_scope_index: Option<ScopeIndex>,    // Current scope being parsed
-    scope_locals_start: Vec<usize>,             // Starting index for each scope's locals in function_locals
+    function_locals: Vec<Local>,                 // Stack of locals for current func being parsed
+    current_func_index: Option<FuncIndex>,    // Current func being parsed
+    func_locals_start: Vec<usize>,             // Starting index for each func's locals in function_locals
 }
 
 #[derive(Debug)]
@@ -58,11 +58,11 @@ impl Parser {
             ast: Ast::new(),
             binding_map: HashMap::new(),
             cleanup_stack: Vec::new(),
-            scope_stack: Vec::new(),
+            func_stack: Vec::new(),
             block_stack: Vec::new(),
             function_locals: Vec::new(),
-            current_scope_index: None,
-            scope_locals_start: Vec::new(),
+            current_func_index: None,
+            func_locals_start: Vec::new(),
         };
 
         parser.update_current_token();
@@ -140,17 +140,17 @@ impl Parser {
         let start_token_index = self.token_index;
         let mut nodes = Vec::new();
 
-        let module_scope_id = self.enter_scope();
+        let module_func_id = self.enter_func(true, false);
 
         while self.current_token.token_type != TokenType::Eof {
             let node = self.parse_top_level_definition()?;
             nodes.push(node);
         }
 
-        self.exit_scope(module_scope_id);
+        self.exit_func(module_func_id);
 
         let nodes_ref = self.ast.add_node_refs(&nodes);
-        let module_node = Node::Module(module_scope_id, nodes_ref);
+        let module_node = Node::Module(module_func_id, nodes_ref);
         let info = NodeInfo::new(start_token_index);
         Ok(self.ast.add_node(module_node, info))
     }
@@ -187,8 +187,8 @@ impl Parser {
             let local = Local {
                 name: name_ref,
                 is_param: false,
-                is_static: false, // Functions are not static by default
-                is_const: true,   // Functions are const
+                is_static: true, // Functions variables are static
+                is_const: true,  // Functions are const
                 ty: None, // TODO: proper function type inference
             };
 
@@ -202,7 +202,7 @@ impl Parser {
     fn parse_function_value(&mut self, is_static: IsStatic, is_inline: IsInline) -> ParseResult<NodeRef> {
         let start_token_index = self.token_index;
 
-        let function_scope_id = self.enter_scope();
+        let function_func_id = self.enter_func(is_static == IsStatic::Yes, is_inline == IsInline::Yes);
 
         self.expect(TokenType::LeftParen)?;
 
@@ -237,10 +237,10 @@ impl Parser {
         // Parse function body
         let body = self.parse_block()?;
 
-        // Exit function scope
-        self.exit_scope(function_scope_id);
+        // Exit function func
+        self.exit_func(function_func_id);
 
-        let func_node = Node::Func(is_static, is_inline, function_scope_id, body, return_type);
+        let func_node = Node::Func(function_func_id, body, return_type);
         Ok(self
             .ast
             .add_node(func_node, NodeInfo::new(start_token_index)))
@@ -367,23 +367,18 @@ impl Parser {
         }
 
         // Pop and apply cleanup operations until we've handled all for this block
-        while let Some(cleanup) = self.cleanup_stack.last() {
-            let cleanup_block = match cleanup {
-                ScopeCleanup::Delete(_, block) => *block,
-                ScopeCleanup::Replace(_, _, block) => *block,
-            };
-
-            if cleanup_block != block_id {
-                break; // We've finished this block's cleanup operations
-            }
-
-            // Remove and apply the cleanup operation
-            let cleanup = self.cleanup_stack.pop().unwrap();
+        while let Some(cleanup) = self.cleanup_stack.pop() {
             match cleanup {
-                ScopeCleanup::Delete(symbol, _) => {
+                CleanupAction::Delete(symbol, block) => {
+                    if block != block_id {
+                        break; // We've finished this block's cleanup operations
+                    }
                     self.binding_map.remove(&symbol);
                 }
-                ScopeCleanup::Replace(symbol, old_local_ref, _) => {
+                CleanupAction::Replace(symbol, old_local_ref, block) => {
+                    if block != block_id {
+                        break; // We've finished this block's cleanup operations
+                    }
                     self.binding_map.insert(symbol, old_local_ref);
                 }
             }
@@ -791,7 +786,7 @@ impl Parser {
                     let node_ref = self.ast.add_node(local_read, NodeInfo::new(start_token_index));
                     Ok(node_ref)
                 } else {
-                    // Identifier not found in current scope
+                    // Identifier not found in current func
                     return Err(ParseError::new(
                         format!("Undefined variable: {}", identifier_text),
                         token.start,
@@ -890,7 +885,7 @@ impl Parser {
         }
     }
 
-    // Scope management methods
+    // Func management methods
 
     /// Find a labeled block by walking up the block stack
     fn find_labeled_block(&self, label: SymbolRef) -> ParseResult<BlockIndex> {
@@ -909,82 +904,84 @@ impl Parser {
         ))
     }
 
-    /// Enter a new function scope and return its unique ID
-    fn enter_scope(&mut self) -> ScopeIndex {
-        // Create scope in AST immediately with empty locals
-        let scope = Scope {
+    /// Enter a new function func and return its unique ID
+    fn enter_func(&mut self, is_static: bool, is_inline: bool) -> FuncIndex {
+        // Create func in AST immediately with empty locals
+        let func = Func {
+            is_static,
+            is_inline,
             locals: LocalsRef::empty(),
             parent: None, // TODO: For nested functions later
         };
-        let scope_index = self.ast.add_scope(scope);
+        let func_index = self.ast.add_func(func);
         
-        self.scope_stack.push(scope_index);
-        self.current_scope_index = Some(scope_index);
+        self.func_stack.push(func_index);
+        self.current_func_index = Some(func_index);
         
-        // Track where this scope's locals start in function_locals
-        self.scope_locals_start.push(self.function_locals.len());
+        // Track where this func's locals start in function_locals
+        self.func_locals_start.push(self.function_locals.len());
         
-        scope_index
+        func_index
     }
 
-    /// Commit collected locals to the scope and exit it
-    fn exit_scope(&mut self, scope_id: ScopeIndex) {
-        // Verify we're exiting the most recent scope
-        if let Some(&top_scope) = self.scope_stack.last() {
-            assert_eq!(top_scope, scope_id, "Exiting scope out of order");
-            self.scope_stack.pop();
+    /// Commit collected locals to the func and exit it
+    fn exit_func(&mut self, func_index: FuncIndex) {
+        // Verify we're exiting the most recent func
+        if let Some(&top_func) = self.func_stack.last() {
+            assert_eq!(top_func, func_index, "Exiting func out of order");
+            self.func_stack.pop();
         }
         
-        // Commit locals before popping scope_locals_start
-        let locals_start = self.scope_locals_start.last().copied().unwrap_or(0);
+        // Commit locals before popping func_locals_start
+        let locals_start = self.func_locals_start.last().copied().unwrap_or(0);
         
-        // Get locals for this scope
-        let scope_locals = &self.function_locals[locals_start..];
-        let locals_ref = if scope_locals.is_empty() {
+        // Get locals for this func
+        let func_locals = &self.function_locals[locals_start..];
+        let locals_ref = if func_locals.is_empty() {
             LocalsRef::empty()
         } else {
-            self.ast.add_locals(scope_locals)
+            self.ast.add_locals(func_locals)
         };
 
-        // Update the scope's locals_ref
-        self.ast.get_scope_mut(scope_id).locals = locals_ref;
+        // Update the func's locals_ref
+        self.ast.get_func_mut(func_index).locals = locals_ref;
         
-        // Truncate function_locals back to where this scope started
+        // Truncate function_locals back to where this func started
         self.function_locals.truncate(locals_start);
         
-        // Update current scope and pop scope locals start tracking
-        self.current_scope_index = self.scope_stack.last().copied();
-        self.scope_locals_start.pop();
+        // Update current func and pop func locals start tracking
+        self.current_func_index = self.func_stack.last().copied();
+        self.func_locals_start.pop();
     }
 
 
-    /// Add a local to the function_locals stack and bind it to current scope
+    /// Add a local to the function_locals stack and bind it to current func
     /// Returns the LocalRef for this local
     fn add_and_bind_local(&mut self, local: Local) -> LocalRef {
-        // Calculate 0-based index within current scope
-        let scope_start = self.scope_locals_start.last().copied().unwrap_or(0);
-        let index_in_scope = (self.function_locals.len() - scope_start) as u16;
+        // Calculate 0-based index within current func
+        let func_start = self.func_locals_start.last().copied().unwrap_or(0);
+        let index_in_func = (self.function_locals.len() - func_start) as u16;
         let name_ref = local.name;
         self.function_locals.push(local);
         
-        // Create LocalRef with current scope
-        let current_scope = self.current_scope_index.expect("Should be in a scope when adding local");
-        let local_ref = LocalRef::new(current_scope, index_in_scope);
+        // Create LocalRef with current func
+        let current_func = self.current_func_index.expect("Should be in a func when adding local");
+        let local_ref = LocalRef::new(current_func, index_in_func);
 
         // Handle shadowing for cleanup - use current block if in one, otherwise no cleanup needed
-        // (module/function level variables don't get cleaned up until scope ends)
+        // (module/function level variables don't get cleaned up until func ends)
         if let Some(&current_block) = self.block_stack.last() {
             if let Some(old_local_ref) = self.binding_map.get(&name_ref) {
                 // Symbol is being shadowed - save the old binding for restoration
                 self.cleanup_stack
-                    .push(ScopeCleanup::Replace(name_ref, *old_local_ref, current_block));
+                    .push(CleanupAction::Replace(name_ref, *old_local_ref, current_block));
             } else {
                 // New binding - mark for deletion when block exits
                 self.cleanup_stack
-                    .push(ScopeCleanup::Delete(name_ref, current_block));
+                    .push(CleanupAction::Delete(name_ref, current_block));
             }
         }
-        // If not in a block, variables persist until scope ends (handled by exit_scope)
+        // If not in a block, variables persist until func ends (handled by exit_func)
 
         // Update current binding
         self.binding_map.insert(name_ref, local_ref);
@@ -1332,7 +1329,7 @@ mod tests {
     }
 
     #[test]
-    fn test_scope_management() {
+    fn test_func_management() {
         // Test basic variable declaration and usage
         roundtrip("fn main() { let x = 42; return x; }");
 

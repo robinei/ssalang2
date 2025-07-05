@@ -34,15 +34,15 @@ impl VariableSlot {
 /// Stack frame for function activation during compile-time execution
 #[derive(Debug, Clone)]
 pub struct StackFrame {
-    pub scope_index: ScopeIndex,    // Which scope this frame represents
+    pub func_index: FuncIndex,    // Which func this frame represents
     pub locals_count: u16,          // Number of locals in this frame
     pub values_base: usize,         // Index into shared slot stack
 }
 
 impl StackFrame {
-    pub fn new(scope_index: ScopeIndex, locals_count: u16, values_base: usize) -> Self {
+    pub fn new(func_index: FuncIndex, locals_count: u16, values_base: usize) -> Self {
         Self {
-            scope_index,
+            func_index,
             locals_count,
             values_base,
         }
@@ -51,8 +51,8 @@ impl StackFrame {
     /// Convert a LocalRef to a slot index in the shared variable_slots vector
     /// Returns None if the local is not defined in this frame
     pub fn to_slot_index(&self, local_ref: LocalRef) -> Option<usize> {
-        if local_ref.scope == self.scope_index {
-            // local_ref.index is already 0-based within the scope
+        if local_ref.func == self.func_index {
+            // local_ref.index is already 0-based within the func
             Some(self.values_base + local_ref.index as usize)
         } else {
             None
@@ -94,8 +94,8 @@ impl Compiler {
         panic!("Local {:?} not found in any frame", local_ref);
     }
     
-    /// Enter a new function scope, creating a new stack frame
-    pub fn enter_function(&mut self, scope_index: ScopeIndex, locals_ref: LocalsRef) {
+    /// Enter a new function func, creating a new stack frame
+    pub fn enter_function(&mut self, func_index: FuncIndex, locals_ref: LocalsRef) {
         let values_base = self.variable_slots.len();
         
         // Push uninitialized slots for this frame's locals
@@ -103,7 +103,7 @@ impl Compiler {
                                   VariableSlot::uninitialized());
         
         let frame = StackFrame::new(
-            scope_index,
+            func_index,
             locals_ref.count,
             values_base,
         );
@@ -111,7 +111,7 @@ impl Compiler {
         self.frame_stack.push(frame);
     }
     
-    /// Exit the current function scope, removing its stack frame
+    /// Exit the current function func, removing its stack frame
     pub fn exit_function(&mut self) {
         if let Some(frame) = self.frame_stack.pop() {
             // Shrink variable slots to remove this frame's locals

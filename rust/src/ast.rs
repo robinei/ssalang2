@@ -1,16 +1,16 @@
 pub type BlockIndex = u16;
-pub type ScopeIndex = u16;
+pub type FuncIndex = u16;
 
-// Bundle scope and local index together
+// Bundle func and local index together
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct LocalRef {
-    pub scope: ScopeIndex,
-    pub index: u16,  // 0-based index within the scope
+    pub func: FuncIndex,
+    pub index: u16,  // 0-based index within the func
 }
 
 impl LocalRef {
-    pub fn new(scope: ScopeIndex, index: u16) -> Self {
-        Self { scope, index }
+    pub fn new(func: FuncIndex, index: u16) -> Self {
+        Self { func, index }
     }
 }
 
@@ -163,10 +163,10 @@ pub enum Node {
     Return(NodeRef),                   // value_node
 
     // Function node
-    Func(IsStatic, IsInline, ScopeIndex, NodeRef, NodeRef), // is_static, is_inline, scope_index, body, return_type
+    Func(FuncIndex, NodeRef, NodeRef), // func_index, body, return_type
 
     // Module node
-    Module(ScopeIndex, NodesRef), // scope_index, nodes
+    Module(FuncIndex, NodesRef), // func_index, nodes
 }
 
 // Per-node metadata stored alongside AST nodes
@@ -181,11 +181,13 @@ impl NodeInfo {
     }
 }
 
-// Scope for function-level variable storage
+// Func for function-level variable storage
 #[derive(Debug, Clone)]
-pub struct Scope {
+pub struct Func {
+    pub is_static: bool,
+    pub is_inline: bool,
     pub locals: LocalsRef,  // Points to locals in the flat array
-    pub parent: Option<ScopeIndex>,  // For nested functions later
+    pub parent: Option<FuncIndex>,  // For nested functions later
 }
 
 // Block for control flow with optional label
@@ -213,7 +215,7 @@ pub struct Ast {
     strings: Vec<String>,     // String storage for string literals
     symbols: Vec<String>,     // Symbol storage for identifiers (interned)
     symbol_map: std::collections::HashMap<String, SymbolRef>, // For symbol interning
-    scopes: Vec<Scope>,       // All function scopes
+    funcs: Vec<Func>,       // All function funcs
     blocks: Vec<Block>,       // All blocks
     root: Option<NodeRef>,    // Root node of the tree
 }
@@ -228,7 +230,7 @@ impl Ast {
             strings: Vec::new(),
             symbols: Vec::new(),
             symbol_map: std::collections::HashMap::new(),
-            scopes: Vec::new(),
+            funcs: Vec::new(),
             blocks: Vec::new(),
             root: None,
         }
@@ -288,13 +290,13 @@ impl Ast {
         &self.locals[start..end]
     }
 
-    pub fn get_scope_locals(&self, scope_index: ScopeIndex) -> &[Local] {
-        let scope = &self.scopes[scope_index as usize];
-        self.get_locals(scope.locals)
+    pub fn get_func_locals(&self, func_index: FuncIndex) -> &[Local] {
+        let func = &self.funcs[func_index as usize];
+        self.get_locals(func.locals)
     }
 
     pub fn get_local(&self, local_ref: LocalRef) -> &Local {
-        let locals = self.get_scope_locals(local_ref.scope);
+        let locals = self.get_func_locals(local_ref.func);
         &locals[local_ref.index as usize]
     }
 
@@ -307,19 +309,19 @@ impl Ast {
         self.locals.len()
     }
 
-    // Scope management methods
-    pub fn add_scope(&mut self, scope: Scope) -> ScopeIndex {
-        let scope_index = self.scopes.len() as ScopeIndex;
-        self.scopes.push(scope);
-        scope_index
+    // Func management methods
+    pub fn add_func(&mut self, func: Func) -> FuncIndex {
+        let func_index = self.funcs.len() as FuncIndex;
+        self.funcs.push(func);
+        func_index
     }
 
-    pub fn get_scope(&self, scope_index: ScopeIndex) -> &Scope {
-        &self.scopes[scope_index as usize]
+    pub fn get_func(&self, func_index: FuncIndex) -> &Func {
+        &self.funcs[func_index as usize]
     }
 
-    pub fn get_scope_mut(&mut self, scope_index: ScopeIndex) -> &mut Scope {
-        &mut self.scopes[scope_index as usize]
+    pub fn get_func_mut(&mut self, func_index: FuncIndex) -> &mut Func {
+        &mut self.funcs[func_index as usize]
     }
 
     // Block management methods

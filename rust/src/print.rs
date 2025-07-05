@@ -1,4 +1,4 @@
-use crate::{ast::{Ast, Node, NodeRef, TypeAtom, ScopeIndex, IsStatic, IsInline}, lexer::{Token, TokenType}};
+use crate::{ast::{Ast, Node, NodeRef, TypeAtom, FuncIndex, IsStatic, IsInline}, lexer::{Token, TokenType}};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PrintMode {
@@ -236,24 +236,20 @@ impl<'a> PrettyPrinter<'a> {
                 self.print_expression(node_ref);
             }
             Node::DefineFn(local_index, func_node) => {
-                let func_name = self.ast.get_local_name(*local_index);
-                let local = self.ast.get_local(*local_index);
-                
-                if local.is_static {
-                    self.emit_token(TokenType::Static, "static ");
-                }
-                
-                self.emit_token(TokenType::Fn, "fn ");
-                self.emit_token(TokenType::Identifier, func_name);
-                
-                // Delegate to shared function printing logic
-                if let Node::Func(_is_static, is_inline, scope_index, body, return_type) = self.ast.get_node(*func_node) {
-                    if *is_inline == IsInline::Yes {
-                        // Note: inline flag should be on the DefineFn, but for now check the Func
-                        // This might need adjustment based on how flags are handled
+                if let Node::Func(func_index, body, return_type) = self.ast.get_node(*func_node) {
+                    let func = self.ast.get_func(*func_index);
+                    
+                    if func.is_static {
+                        self.emit_token(TokenType::Static, "static ");
+                    }
+                    if func.is_inline {
+                        self.emit_token(TokenType::Static, "inline ");
                     }
                     
-                    self.print_function_signature_and_body(*scope_index, *body, *return_type);
+                    self.emit_token(TokenType::Fn, "fn ");
+                    self.emit_token(TokenType::Identifier, self.ast.get_local_name(*local_index));
+                    
+                    self.print_function_signature_and_body(*func_index, *body, *return_type);
                 }
             }
             Node::Define(local_index, expr) => {
@@ -399,18 +395,19 @@ impl<'a> PrettyPrinter<'a> {
                 self.print_expression(*value);
                 self.emit_token(TokenType::Semicolon, ";");
             }
-            Node::Func(is_static, is_inline, scope_index, body, return_type) => {
-                if *is_static == IsStatic::Yes {
+            Node::Func(func_index, body, return_type) => {
+                let func = self.ast.get_func(*func_index);
+                if func.is_static {
                     self.emit_token(TokenType::Static, "static ");
                 }
-                if *is_inline == IsInline::Yes {
+                if func.is_inline {
                     self.emit_token(TokenType::Inline, "inline ");
                 }
 
                 self.emit_token(TokenType::Fn, "fn");
                 
                 // Delegate to shared function printing logic
-                self.print_function_signature_and_body(*scope_index, *body, *return_type);
+                self.print_function_signature_and_body(*func_index, *body, *return_type);
             }
             Node::Module(_locals_ref, nodes_ref) => {
                 let nodes = self.ast.get_node_refs(*nodes_ref);
@@ -598,10 +595,10 @@ impl<'a> PrettyPrinter<'a> {
 
     /// Print function signature and body: (params) -> return_type { body }
     /// Shared between DefineFn and Func node printing
-    fn print_function_signature_and_body(&mut self, scope_index: ScopeIndex, body: NodeRef, return_type: NodeRef) {
+    fn print_function_signature_and_body(&mut self, func_index: FuncIndex, body: NodeRef, return_type: NodeRef) {
         self.emit_token(TokenType::LeftParen, "(");
         
-        for (i, local) in self.ast.get_scope_locals(scope_index).iter().enumerate() {
+        for (i, local) in self.ast.get_func_locals(func_index).iter().enumerate() {
             if !local.is_param {
                 break;
             }
