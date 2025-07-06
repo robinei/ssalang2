@@ -229,10 +229,7 @@ impl<'a> AstPrinter<'a> {
                 self.buffer.push('"');
             }
             // Operators are handled by print_expression
-            Node::UnopNeg(_) | Node::UnopNot(_) | Node::BinopAdd(_, _) | Node::BinopSub(_, _) | 
-            Node::BinopMul(_, _) | Node::BinopDiv(_, _) | Node::BinopEq(_, _) | 
-            Node::BinopNeq(_, _) | Node::BinopLt(_, _) | Node::BinopGt(_, _) |
-            Node::BinopLtEq(_, _) | Node::BinopGtEq(_, _) | Node::BinopAnd(_, _) | Node::BinopOr(_, _) => {
+            Node::Unop(_, _) | Node::Binop(_, _, _) => {
                 self.print_expression(node_ref);
             }
             Node::DefineFn(local_index, func_node) => {
@@ -436,73 +433,14 @@ impl<'a> AstPrinter<'a> {
         }
 
         match node {
-            Node::BinopAdd(left, right) => {
+            Node::Binop(binop_type, left, right) => {
                 self.print_expression_with_precedence(*left, current_precedence);
-                self.emit_token(TokenType::Plus, " + ");
+                self.emit_token(binop_type.token_type(), binop_type.token_text());
                 self.print_expression_with_precedence(*right, current_precedence + 1);
             }
-            Node::BinopSub(left, right) => {
-                self.print_expression_with_precedence(*left, current_precedence);
-                self.emit_token(TokenType::Minus, " - ");
-                self.print_expression_with_precedence(*right, current_precedence + 1);
-            }
-            Node::BinopMul(left, right) => {
-                self.print_expression_with_precedence(*left, current_precedence);
-                self.emit_token(TokenType::Star, " * ");
-                self.print_expression_with_precedence(*right, current_precedence + 1);
-            }
-            Node::BinopDiv(left, right) => {
-                self.print_expression_with_precedence(*left, current_precedence);
-                self.emit_token(TokenType::Slash, " / ");
-                self.print_expression_with_precedence(*right, current_precedence + 1);
-            }
-            Node::BinopEq(left, right) => {
-                self.print_expression_with_precedence(*left, current_precedence);
-                self.emit_token(TokenType::Equal, " == ");
-                self.print_expression_with_precedence(*right, current_precedence + 1);
-            }
-            Node::BinopNeq(left, right) => {
-                self.print_expression_with_precedence(*left, current_precedence);
-                self.emit_token(TokenType::NotEqual, " != ");
-                self.print_expression_with_precedence(*right, current_precedence + 1);
-            }
-            Node::BinopLt(left, right) => {
-                self.print_expression_with_precedence(*left, current_precedence);
-                self.emit_token(TokenType::Lt, " < ");
-                self.print_expression_with_precedence(*right, current_precedence + 1);
-            }
-            Node::BinopGt(left, right) => {
-                self.print_expression_with_precedence(*left, current_precedence);
-                self.emit_token(TokenType::Gt, " > ");
-                self.print_expression_with_precedence(*right, current_precedence + 1);
-            }
-            Node::BinopLtEq(left, right) => {
-                self.print_expression_with_precedence(*left, current_precedence);
-                self.emit_token(TokenType::LtEq, " <= ");
-                self.print_expression_with_precedence(*right, current_precedence + 1);
-            }
-            Node::BinopGtEq(left, right) => {
-                self.print_expression_with_precedence(*left, current_precedence);
-                self.emit_token(TokenType::GtEq, " >= ");
-                self.print_expression_with_precedence(*right, current_precedence + 1);
-            }
-            Node::UnopNeg(operand) => {
-                self.emit_token(TokenType::Minus, "-");
+            Node::Unop(unop_type, operand) => {
+                self.emit_token(unop_type.token_type(), unop_type.token_text());
                 self.print_expression_with_precedence(*operand, current_precedence);
-            }
-            Node::UnopNot(operand) => {
-                self.emit_token(TokenType::Not, "!");
-                self.print_expression_with_precedence(*operand, current_precedence);
-            }
-            Node::BinopAnd(left, right) => {
-                self.print_expression_with_precedence(*left, current_precedence);
-                self.emit_token(TokenType::And, " && ");
-                self.print_expression_with_precedence(*right, current_precedence + 1);
-            }
-            Node::BinopOr(left, right) => {
-                self.print_expression_with_precedence(*left, current_precedence);
-                self.emit_token(TokenType::Or, " || ");
-                self.print_expression_with_precedence(*right, current_precedence + 1);
             }
             _ => {
                 // For non-expression nodes, just print normally
@@ -517,15 +455,9 @@ impl<'a> AstPrinter<'a> {
 
     fn get_node_precedence(&self, node: &Node) -> i32 {
         match node {
-            Node::BinopOr(_, _) => 1,                         // Logical OR: lowest precedence
-            Node::BinopAnd(_, _) => 2,                        // Logical AND
-            Node::BinopEq(_, _) | Node::BinopNeq(_, _) |
-            Node::BinopLt(_, _) | Node::BinopGt(_, _) |
-            Node::BinopLtEq(_, _) | Node::BinopGtEq(_, _) => 3, // Equality and comparison
-            Node::BinopAdd(_, _) | Node::BinopSub(_, _) => 4, // Addition/subtraction
-            Node::BinopMul(_, _) | Node::BinopDiv(_, _) => 5, // Multiplication/division
-            Node::UnopNeg(_) | Node::UnopNot(_) => 6,         // Unary operators: highest precedence
-            _ => 0,                                           // Non-operators don't have precedence
+            Node::Binop(binop_type, _, _) => binop_type.precedence(),
+            Node::Unop(unop_type, _) => unop_type.precedence(),
+            _ => 0, // Non-operators don't have precedence
         }
     }
 

@@ -1,3 +1,5 @@
+use crate::lexer::TokenType;
+
 pub type BlockIndex = u16;
 pub type FuncIndex = u16;
 
@@ -116,6 +118,117 @@ pub enum TypeAtom {
     I32 = 2,
 }
 
+// Unary operator types
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u8)]
+pub enum UnopType {
+    Neg = 0, // -x
+    Not = 1, // !x
+}
+
+impl UnopType {
+    pub fn precedence(self) -> i32 {
+        6 // Unary operators have highest precedence
+    }
+    
+    pub fn token_type(self) -> crate::lexer::TokenType {
+        match self {
+            UnopType::Neg => crate::lexer::TokenType::Minus,
+            UnopType::Not => crate::lexer::TokenType::Not,
+        }
+    }
+    
+    pub fn token_text(self) -> &'static str {
+        match self {
+            UnopType::Neg => "-",
+            UnopType::Not => "!",
+        }
+    }
+}
+
+// Binary operator types  
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u8)]
+pub enum BinopType {
+    Add = 0,   // +
+    Sub = 1,   // -
+    Mul = 2,   // *
+    Div = 3,   // /
+    Eq = 4,    // ==
+    Neq = 5,   // !=
+    Lt = 6,    // <
+    Gt = 7,    // >
+    LtEq = 8,  // <=
+    GtEq = 9,  // >=
+    And = 10,  // &&
+    Or = 11,   // ||
+}
+
+impl BinopType {
+    pub fn precedence(self) -> i32 {
+        match self {
+            BinopType::Or => 1,                                 // Logical OR: lowest precedence
+            BinopType::And => 2,                                // Logical AND
+            BinopType::Eq | BinopType::Neq | BinopType::Lt | 
+            BinopType::Gt | BinopType::LtEq | BinopType::GtEq => 3, // Equality and comparison
+            BinopType::Add | BinopType::Sub => 4,               // Addition/subtraction
+            BinopType::Mul | BinopType::Div => 5,               // Multiplication/division
+        }
+    }
+
+    pub fn from_token_type(token_type: TokenType) -> Option<Self> {
+        match token_type {
+            TokenType::Plus => Some(BinopType::Add),
+            TokenType::Minus => Some(BinopType::Sub),
+            TokenType::Star => Some(BinopType::Mul),
+            TokenType::Slash => Some(BinopType::Div),
+            TokenType::Equal => Some(BinopType::Eq),
+            TokenType::NotEqual => Some(BinopType::Neq),
+            TokenType::Lt => Some(BinopType::Lt),
+            TokenType::Gt => Some(BinopType::Gt),
+            TokenType::LtEq => Some(BinopType::LtEq),
+            TokenType::GtEq => Some(BinopType::GtEq),
+            TokenType::And => Some(BinopType::And),
+            TokenType::Or => Some(BinopType::Or),
+            _ => None,
+        }
+    }
+    
+    pub fn token_type(self) -> crate::lexer::TokenType {
+        match self {
+            BinopType::Add => crate::lexer::TokenType::Plus,
+            BinopType::Sub => crate::lexer::TokenType::Minus,
+            BinopType::Mul => crate::lexer::TokenType::Star,
+            BinopType::Div => crate::lexer::TokenType::Slash,
+            BinopType::Eq => crate::lexer::TokenType::Equal,
+            BinopType::Neq => crate::lexer::TokenType::NotEqual,
+            BinopType::Lt => crate::lexer::TokenType::Lt,
+            BinopType::Gt => crate::lexer::TokenType::Gt,
+            BinopType::LtEq => crate::lexer::TokenType::LtEq,
+            BinopType::GtEq => crate::lexer::TokenType::GtEq,
+            BinopType::And => crate::lexer::TokenType::And,
+            BinopType::Or => crate::lexer::TokenType::Or,
+        }
+    }
+    
+    pub fn token_text(self) -> &'static str {
+        match self {
+            BinopType::Add => " + ",
+            BinopType::Sub => " - ",
+            BinopType::Mul => " * ",
+            BinopType::Div => " / ",
+            BinopType::Eq => " == ",
+            BinopType::Neq => " != ",
+            BinopType::Lt => " < ",
+            BinopType::Gt => " > ",
+            BinopType::LtEq => " <= ",
+            BinopType::GtEq => " >= ",
+            BinopType::And => " && ",
+            BinopType::Or => " || ",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum Node {
@@ -128,23 +241,9 @@ pub enum Node {
     ConstI32(i32),          // value
     ConstString(StringRef), // string_ref
 
-    // Unary operation nodes
-    UnopNeg(NodeRef), // operand
-    UnopNot(NodeRef), // operand
-
-    // Binary operation nodes
-    BinopAdd(NodeRef, NodeRef), // left, right
-    BinopSub(NodeRef, NodeRef), // left, right
-    BinopMul(NodeRef, NodeRef), // left, right
-    BinopDiv(NodeRef, NodeRef), // left, right
-    BinopEq(NodeRef, NodeRef),  // left, right
-    BinopNeq(NodeRef, NodeRef), // left, right
-    BinopLt(NodeRef, NodeRef),  // left, right
-    BinopGt(NodeRef, NodeRef),  // left, right
-    BinopLtEq(NodeRef, NodeRef), // left, right
-    BinopGtEq(NodeRef, NodeRef), // left, right
-    BinopAnd(NodeRef, NodeRef), // left, right
-    BinopOr(NodeRef, NodeRef),  // left, right
+    // Operation nodes
+    Unop(UnopType, NodeRef),              // op_type, operand
+    Binop(BinopType, NodeRef, NodeRef),   // op_type, left, right
 
     // Local variable nodes
     DefineFn(LocalRef, NodeRef),   // local_ref, function_node - fn name() {} syntax

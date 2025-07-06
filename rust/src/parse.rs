@@ -648,55 +648,24 @@ impl Parser {
         self.parse_expression_precedence(0)
     }
 
-    // Get precedence for binary operators
-    fn get_precedence(&self, token_type: TokenType) -> Option<i32> {
-        match token_type {
-            TokenType::Or => Some(1),                           // Logical OR: lowest precedence
-            TokenType::And => Some(2),                          // Logical AND
-            TokenType::Equal | TokenType::NotEqual | 
-            TokenType::Lt | TokenType::Gt | 
-            TokenType::LtEq | TokenType::GtEq => Some(3),       // Equality and comparison
-            TokenType::Plus | TokenType::Minus => Some(4),      // Addition/subtraction
-            TokenType::Star | TokenType::Slash => Some(5),      // Multiplication/division: highest precedence
-            // Bitwise operators are not yet supported in parser
-            // TokenType::BitOr => Some(?),
-            // TokenType::BitAnd => Some(?),
-            _ => None,
-        }
-    }
-
     // Precedence climbing algorithm
     fn parse_expression_precedence(&mut self, min_prec: i32) -> ParseResult<NodeRef> {
         let mut left = self.parse_atom()?;
 
-        while let Some(prec) = self.get_precedence(self.current_token.token_type) {
+        while let Some(binop_type) = BinopType::from_token_type(self.current_token.token_type) {
+            let prec = binop_type.precedence();
             if prec < min_prec {
                 break;
             }
 
             let start_token_index = self.token_index;
-            let op = self.current_token.token_type;
             self.advance();
 
             // For left-associative operators, use prec + 1
             // For right-associative operators, use prec
             let right = self.parse_expression_precedence(prec + 1)?;
 
-            let node = match op {
-                TokenType::Plus => Node::BinopAdd(left, right),
-                TokenType::Minus => Node::BinopSub(left, right),
-                TokenType::Star => Node::BinopMul(left, right),
-                TokenType::Slash => Node::BinopDiv(left, right),
-                TokenType::Equal => Node::BinopEq(left, right),
-                TokenType::NotEqual => Node::BinopNeq(left, right),
-                TokenType::Lt => Node::BinopLt(left, right),
-                TokenType::Gt => Node::BinopGt(left, right),
-                TokenType::LtEq => Node::BinopLtEq(left, right),
-                TokenType::GtEq => Node::BinopGtEq(left, right),
-                TokenType::And => Node::BinopAnd(left, right),
-                TokenType::Or => Node::BinopOr(left, right),
-                _ => unreachable!(),
-            };
+            let node = Node::Binop(binop_type, left, right);
 
             left = self.ast.add_node(node, NodeInfo::new(start_token_index));
         }
@@ -711,19 +680,19 @@ impl Parser {
                 let start_token_index = self.token_index;
                 self.advance();
                 let operand = self.parse_atom()?; // Right-associative for multiple negations
-                let neg_node = Node::UnopNeg(operand);
+                let unop_node = Node::Unop(UnopType::Neg, operand);
                 Ok(self
                     .ast
-                    .add_node(neg_node, NodeInfo::new(start_token_index)))
+                    .add_node(unop_node, NodeInfo::new(start_token_index)))
             }
             TokenType::Not => {
                 let start_token_index = self.token_index;
                 self.advance();
                 let operand = self.parse_atom()?; // Right-associative for multiple negations
-                let not_node = Node::UnopNot(operand);
+                let unop_node = Node::Unop(UnopType::Not, operand);
                 Ok(self
                     .ast
-                    .add_node(not_node, NodeInfo::new(start_token_index)))
+                    .add_node(unop_node, NodeInfo::new(start_token_index)))
             }
             _ => self.parse_primary()
         }
