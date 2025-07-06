@@ -303,7 +303,7 @@ mod tests {
         let printer = IrPrinter::new(&code);
         let output = printer.print();
         
-        insta::assert_snapshot!(output);
+        insta::assert_snapshot!(output, @"");
     }
 
     #[test]
@@ -315,7 +315,12 @@ mod tests {
         let printer = IrPrinter::new(&code);
         let output = printer.print();
         
-        insta::assert_snapshot!(output);
+        insta::assert_snapshot!(output, @r###"
+        ; === CONSTANTS & UNSCHEDULED ===
+        c2:    const_bool true  ; bool
+        c1:    const_i32  42  ; i32
+
+        "###);
     }
 
     #[test]
@@ -329,7 +334,15 @@ mod tests {
         let printer = IrPrinter::new(&code);
         let output = printer.print();
         
-        insta::assert_snapshot!(output);
+        insta::assert_snapshot!(output, @r###"
+        ; === CONSTANTS & UNSCHEDULED ===
+        c1:    const_i32  42  ; i32
+
+        ; === FUNCTION CODE ===
+        ; Block b1:
+               print      c1
+               ret        c1
+        "###);
     }
 
     #[test] 
@@ -343,7 +356,15 @@ mod tests {
         let printer = IrPrinter::new(&code);
         let output = printer.print();
         
-        insta::assert_snapshot!(output);
+        insta::assert_snapshot!(output, @r###"
+        ; === CONSTANTS & UNSCHEDULED ===
+        c1:    const_i32  42  ; i32
+
+        ; === FUNCTION CODE ===
+        ; Block b1:
+        i2:    add        c1, c1  ; i32
+               ret        i2
+        "###);
     }
 
     #[test]
@@ -376,7 +397,23 @@ mod tests {
         let printer = IrPrinter::new(&code);
         let output = printer.print();
         
-        insta::assert_snapshot!(output);
+        insta::assert_snapshot!(output, @r###"
+        ; === CONSTANTS & UNSCHEDULED ===
+        c3:    const_i32  10  ; i32
+        c2:    const_bool true  ; bool
+        c1:    const_i32  42       ; i32
+
+        ; === FUNCTION CODE ===
+        ; Block b1:
+        i2:    add        c1, c3  ; i32
+        i3:    eq         i2, c1  ; bool
+               branch     i3, b2, b3
+        ; Block b2:
+               print      c1
+               ret        c1
+        ; Block b3:
+               ret        c3
+        "###);
     }
 
     #[test]
@@ -398,6 +435,13 @@ mod tests {
         let uncolored_printer = IrPrinter::new(&code);
         let uncolored_output = uncolored_printer.print();
         
-        insta::assert_snapshot!(uncolored_output);
+        insta::assert_snapshot!(uncolored_output, @r###"
+        ; === CONSTANTS & UNSCHEDULED ===
+        c1:    const_i32  42  ; i32
+
+        ; === FUNCTION CODE ===
+        ; Block b1:
+               ret        c1
+        "###);
     }
 }
