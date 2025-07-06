@@ -237,7 +237,7 @@ pub enum Node {
     LocalRead(LocalRef),           // local_ref
 
     // Control flow nodes
-    Block(BlockIndex, NodesRef), // is_static, block_index, nodes
+    Block(BlockIndex, NodesRef), // block_index, nodes
     If(bool, NodeRef, NodeRef, NodeRef),    // is_inline, cond, then, els
     While(bool, NodeRef, NodeRef),          // is_inline, cond, body
 
