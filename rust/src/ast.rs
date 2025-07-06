@@ -94,21 +94,6 @@ impl NodesRef {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[repr(u8)]
-pub enum IsInline {
-    No,
-    Yes
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[repr(u8)]
-pub enum IsStatic {
-    No,
-    Yes
-}
-
-
 // Separate enum for type atoms
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
@@ -253,8 +238,8 @@ pub enum Node {
 
     // Control flow nodes
     Block(BlockIndex, NodesRef), // is_static, block_index, nodes
-    If(IsInline, NodeRef, NodeRef, NodeRef),    // is_inline, cond, then, els
-    While(IsInline, NodeRef, NodeRef),          // is_inline, cond, body
+    If(bool, NodeRef, NodeRef, NodeRef),    // is_inline, cond, then, els
+    While(bool, NodeRef, NodeRef),          // is_inline, cond, body
 
     // Jump nodes
     Break(BlockIndex, NodeRef), // block_index, value

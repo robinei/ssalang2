@@ -199,10 +199,10 @@ impl Parser {
         }
     }
 
-    fn parse_function_value(&mut self, is_static: IsStatic, is_inline: IsInline) -> ParseResult<NodeRef> {
+    fn parse_function_value(&mut self, is_static: bool, is_inline: bool) -> ParseResult<NodeRef> {
         let start_token_index = self.token_index;
 
-        let function_func_id = self.enter_func(is_static == IsStatic::Yes, is_inline == IsInline::Yes);
+        let function_func_id = self.enter_func(is_static, is_inline);
 
         self.expect(TokenType::LeftParen)?;
 
@@ -335,7 +335,7 @@ impl Parser {
 
         // Create and register the block
         let block = Block {
-            is_static: is_static == IsStatic::Yes,
+            is_static,
             name: block_name
         };
         let block_id = self.ast.add_block(block);
@@ -488,7 +488,7 @@ impl Parser {
         let local = Local {
             name: name_ref,
             is_param: false,
-            is_static: is_static == IsStatic::Yes,
+            is_static,
             is_const,
             ty: None,
         };
@@ -838,22 +838,22 @@ impl Parser {
     // Flag parsing helpers
     
     /// Parse static flag, advancing if present
-    fn parse_static_flag(&mut self) -> IsStatic {
+    fn parse_static_flag(&mut self) -> bool {
         if self.current_token.token_type == TokenType::Static {
             self.advance();
-            IsStatic::Yes
+            true
         } else {
-            IsStatic::No
+            false
         }
     }
     
     /// Parse inline flag, advancing if present  
-    fn parse_inline_flag(&mut self) -> IsInline {
+    fn parse_inline_flag(&mut self) -> bool {
         if self.current_token.token_type == TokenType::Inline {
             self.advance();
-            IsInline::Yes
+            true
         } else {
-            IsInline::No
+            false
         }
     }
 

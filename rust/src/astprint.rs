@@ -1,4 +1,4 @@
-use crate::{ast::{Ast, Node, NodeRef, TypeAtom, FuncIndex, IsInline}, lexer::{Token, TokenType}};
+use crate::{ast::{Ast, Node, NodeRef, TypeAtom, FuncIndex}, lexer::{Token, TokenType}};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PrintMode {
@@ -322,7 +322,7 @@ impl<'a> AstPrinter<'a> {
                 }
             }
             Node::If(is_inline, cond, then_branch, else_branch) => {
-                if *is_inline == IsInline::Yes {
+                if *is_inline {
                     self.emit_token(TokenType::Inline, "inline ");
                 }
 
@@ -345,7 +345,7 @@ impl<'a> AstPrinter<'a> {
                 }
             }
             Node::While(is_inline, cond, body) => {
-                if *is_inline == IsInline::Yes {
+                if *is_inline {
                     self.emit_token(TokenType::Inline, "inline ");
                 }
 
