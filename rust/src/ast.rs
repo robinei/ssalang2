@@ -252,7 +252,7 @@ pub enum Node {
     LocalRead(LocalRef),           // local_ref
 
     // Control flow nodes
-    Block(IsStatic, BlockIndex, NodesRef), // is_static, block_index, nodes
+    Block(BlockIndex, NodesRef), // is_static, block_index, nodes
     If(IsInline, NodeRef, NodeRef, NodeRef),    // is_inline, cond, then, els
     While(IsInline, NodeRef, NodeRef),          // is_inline, cond, body
 
@@ -292,6 +292,7 @@ pub struct Func {
 // Block for control flow with optional label
 #[derive(Debug, Clone)]
 pub struct Block {
+    pub is_static: bool,
     pub name: Option<SymbolRef>,  // Optional block label
 }
 

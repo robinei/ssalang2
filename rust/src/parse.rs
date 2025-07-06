@@ -334,7 +334,10 @@ impl Parser {
         };
 
         // Create and register the block
-        let block = Block { name: block_name };
+        let block = Block {
+            is_static: is_static == IsStatic::Yes,
+            name: block_name
+        };
         let block_id = self.ast.add_block(block);
         self.block_stack.push(block_id);
 
@@ -385,7 +388,7 @@ impl Parser {
         }
 
         let statements_ref = self.ast.add_node_refs(&statements);
-        let block_node = Node::Block(is_static, block_id, statements_ref);
+        let block_node = Node::Block(block_id, statements_ref);
         Ok(self
             .ast
             .add_node(block_node, NodeInfo::new(start_token_index)))
@@ -557,7 +560,7 @@ impl Parser {
                 .add_node(Node::ConstUnit, NodeInfo::new(self.token_index));
             let statements_ref = self.ast.add_node_refs(&[unit_node]);
             self.ast.add_node(
-                Node::Block(IsStatic::No, 0, statements_ref),
+                Node::Block(0, statements_ref),
                 NodeInfo::new(self.token_index),
             )
         };

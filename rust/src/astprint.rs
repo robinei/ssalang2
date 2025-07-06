@@ -1,4 +1,4 @@
-use crate::{ast::{Ast, Node, NodeRef, TypeAtom, FuncIndex, IsStatic, IsInline}, lexer::{Token, TokenType}};
+use crate::{ast::{Ast, Node, NodeRef, TypeAtom, FuncIndex, IsInline}, lexer::{Token, TokenType}};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PrintMode {
@@ -277,12 +277,13 @@ impl<'a> AstPrinter<'a> {
                 let var_name = self.ast.get_local_name(*local_index);
                 self.emit_token(TokenType::Identifier, var_name);
             }
-            Node::Block(is_static, block_index, nodes_ref) => {
-                if *is_static == IsStatic::Yes {
+            Node::Block(block_index, nodes_ref) => {
+                let block = self.ast.get_block(*block_index);
+
+                if block.is_static {
                     self.emit_token(TokenType::Static, "static ");
                 }
 
-                let block = self.ast.get_block(*block_index);
                 let nodes = self.ast.get_node_refs(*nodes_ref);
 
                 if nodes.is_empty() || nodes.len() == 1 && self.is_unit_value(nodes[0]) {
@@ -499,7 +500,7 @@ impl<'a> AstPrinter<'a> {
     }
 
     fn is_block_node(&self, node_ref: NodeRef) -> bool {
-        matches!(self.ast.get_node(node_ref), Node::Block(_, _, _))
+        matches!(self.ast.get_node(node_ref), Node::Block(_, _))
     }
 
     fn is_if_node(&self, node_ref: NodeRef) -> bool {
@@ -508,7 +509,7 @@ impl<'a> AstPrinter<'a> {
 
     fn is_empty_or_unit_only_block(&self, node_ref: NodeRef) -> bool {
         // Check if this is a Block with no statements or only unit value
-        if let Node::Block(_, _, nodes_ref) = self.ast.get_node(node_ref) {
+        if let Node::Block(_, nodes_ref) = self.ast.get_node(node_ref) {
             if nodes_ref.count == 0 {
                 return true;
             }
