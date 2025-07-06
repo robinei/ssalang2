@@ -1,0 +1,11 @@
+---
+source: src/irprint.rs
+expression: output
+---
+; === CONSTANTS & UNSCHEDULED ===
+c1:    const_i32  42  ; i32
+
+; === FUNCTION CODE ===
+; Block b1:
+i2:    add        c1, c1  ; i32
+       ret        i2

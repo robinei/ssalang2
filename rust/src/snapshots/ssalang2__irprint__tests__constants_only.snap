@@ -1,0 +1,7 @@
+---
+source: src/irprint.rs
+expression: output
+---
+; === CONSTANTS & UNSCHEDULED ===
+c2:    const_bool true  ; bool
+c1:    const_i32  42  ; i32

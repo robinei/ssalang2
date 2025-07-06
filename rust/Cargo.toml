@@ -9,3 +9,6 @@ path = "src/main.rs"
 
 [dependencies]
 smallvec = { version = "1.13", features = ["union"] }
+
+[dev-dependencies]
+insta = "1.40"

@@ -303,8 +303,7 @@ mod tests {
         let printer = IrPrinter::new(&code);
         let output = printer.print();
         
-        let expected = "";
-        assert_eq!(output.trim(), expected);
+        insta::assert_snapshot!(output);
     }
 
     #[test]
@@ -316,12 +315,7 @@ mod tests {
         let printer = IrPrinter::new(&code);
         let output = printer.print();
         
-        let expected = r#"; === CONSTANTS & UNSCHEDULED ===
-c2:    const_bool true  ; bool
-c1:    const_i32  42  ; i32
-
-"#;
-        assert_eq!(output, expected);
+        insta::assert_snapshot!(output);
     }
 
     #[test]
@@ -335,15 +329,7 @@ c1:    const_i32  42  ; i32
         let printer = IrPrinter::new(&code);
         let output = printer.print();
         
-        let expected = r#"; === CONSTANTS & UNSCHEDULED ===
-c1:    const_i32  42  ; i32
-
-; === FUNCTION CODE ===
-; Block b1:
-       print      c1
-       ret        c1
-"#;
-        assert_eq!(output, expected);
+        insta::assert_snapshot!(output);
     }
 
     #[test] 
@@ -357,15 +343,7 @@ c1:    const_i32  42  ; i32
         let printer = IrPrinter::new(&code);
         let output = printer.print();
         
-        let expected = r#"; === CONSTANTS & UNSCHEDULED ===
-c1:    const_i32  42  ; i32
-
-; === FUNCTION CODE ===
-; Block b1:
-i2:    add        c1, c1  ; i32
-       ret        i2
-"#;
-        assert_eq!(output, expected);
+        insta::assert_snapshot!(output);
     }
 
     #[test]
@@ -398,23 +376,7 @@ i2:    add        c1, c1  ; i32
         let printer = IrPrinter::new(&code);
         let output = printer.print();
         
-        let expected = r#"; === CONSTANTS & UNSCHEDULED ===
-c3:    const_i32  10  ; i32
-c2:    const_bool true  ; bool
-c1:    const_i32  42       ; i32
-
-; === FUNCTION CODE ===
-; Block b1:
-i2:    add        c1, c3  ; i32
-i3:    eq         i2, c1  ; bool
-       branch     i3, b2, b3
-; Block b2:
-       print      c1
-       ret        c1
-; Block b3:
-       ret        c3
-"#;
-        assert_eq!(output, expected);
+        insta::assert_snapshot!(output);
     }
 
     #[test]
@@ -427,22 +389,15 @@ i3:    eq         i2, c1  ; bool
         let printer = IrPrinter::new_colored(&code);
         let output = printer.print();
         
-        // Should contain ANSI color codes and the expected structure
+        // Should contain ANSI color codes
         assert!(output.contains("\x1b["));
         assert!(output.contains("const_i32"));
         assert!(output.contains("ret"));
         
-        // Test structure without colors for easier verification
+        // Test structure without colors using snapshot
         let uncolored_printer = IrPrinter::new(&code);
         let uncolored_output = uncolored_printer.print();
         
-        let expected = r#"; === CONSTANTS & UNSCHEDULED ===
-c1:    const_i32  42  ; i32
-
-; === FUNCTION CODE ===
-; Block b1:
-       ret        c1
-"#;
-        assert_eq!(uncolored_output, expected);
+        insta::assert_snapshot!(uncolored_output);
     }
 }
