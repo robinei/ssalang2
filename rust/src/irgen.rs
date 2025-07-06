@@ -366,6 +366,218 @@ impl IrGen {
         Instr::Neq(Meta::new(Type::Bool), lhs_ref, rhs_ref)
     }
 
+    pub fn sub(&mut self, lhs: Instr, rhs: Instr) -> Instr {
+        assert_eq!(lhs.get_type(), rhs.get_type());
+        
+        // Constant folding
+        match (lhs, rhs) {
+            (Instr::ConstI32(_, lval), Instr::ConstI32(_, rval)) => {
+                return Instr::const_i32(lval.wrapping_sub(rval));
+            }
+            (_, Instr::ConstI32(_, 0)) => {
+                return lhs; // x - 0 = x
+            }
+            _ => {}
+        }
+        
+        let lhs_ref = self.intern_instr(lhs);
+        let rhs_ref = self.intern_instr(rhs);
+        Instr::Sub(Meta::new(lhs.get_type()), lhs_ref, rhs_ref)
+    }
+
+    pub fn mul(&mut self, lhs: Instr, rhs: Instr) -> Instr {
+        assert_eq!(lhs.get_type(), rhs.get_type());
+        
+        // Constant folding
+        match (lhs, rhs) {
+            (Instr::ConstI32(_, lval), Instr::ConstI32(_, rval)) => {
+                return Instr::const_i32(lval.wrapping_mul(rval));
+            }
+            (Instr::ConstI32(_, 0), _) | (_, Instr::ConstI32(_, 0)) => {
+                return Instr::const_i32(0); // x * 0 = 0
+            }
+            (Instr::ConstI32(_, 1), _) => {
+                return rhs; // 1 * x = x
+            }
+            (_, Instr::ConstI32(_, 1)) => {
+                return lhs; // x * 1 = x
+            }
+            _ => {}
+        }
+        
+        let lhs_ref = self.intern_instr(lhs);
+        let rhs_ref = self.intern_instr(rhs);
+        Instr::Mul(Meta::new(lhs.get_type()), lhs_ref, rhs_ref)
+    }
+
+    pub fn div(&mut self, lhs: Instr, rhs: Instr) -> Instr {
+        assert_eq!(lhs.get_type(), rhs.get_type());
+        
+        // Constant folding
+        match (lhs, rhs) {
+            (Instr::ConstI32(_, lval), Instr::ConstI32(_, rval)) => {
+                if rval != 0 {
+                    return Instr::const_i32(lval / rval);
+                }
+                // Division by zero - let runtime handle it
+            }
+            (_, Instr::ConstI32(_, 1)) => {
+                return lhs; // x / 1 = x
+            }
+            _ => {}
+        }
+        
+        let lhs_ref = self.intern_instr(lhs);
+        let rhs_ref = self.intern_instr(rhs);
+        Instr::Div(Meta::new(lhs.get_type()), lhs_ref, rhs_ref)
+    }
+
+    pub fn lt(&mut self, lhs: Instr, rhs: Instr) -> Instr {
+        assert_eq!(lhs.get_type(), rhs.get_type());
+        
+        // Constant folding
+        match (lhs, rhs) {
+            (Instr::ConstI32(_, lval), Instr::ConstI32(_, rval)) => {
+                return Instr::const_bool(lval < rval);
+            }
+            _ => {}
+        }
+        
+        let lhs_ref = self.intern_instr(lhs);
+        let rhs_ref = self.intern_instr(rhs);
+        Instr::Lt(Meta::new(Type::Bool), lhs_ref, rhs_ref)
+    }
+
+    pub fn gt(&mut self, lhs: Instr, rhs: Instr) -> Instr {
+        assert_eq!(lhs.get_type(), rhs.get_type());
+        
+        // Constant folding
+        match (lhs, rhs) {
+            (Instr::ConstI32(_, lval), Instr::ConstI32(_, rval)) => {
+                return Instr::const_bool(lval > rval);
+            }
+            _ => {}
+        }
+        
+        let lhs_ref = self.intern_instr(lhs);
+        let rhs_ref = self.intern_instr(rhs);
+        Instr::Gt(Meta::new(Type::Bool), lhs_ref, rhs_ref)
+    }
+
+    pub fn lt_eq(&mut self, lhs: Instr, rhs: Instr) -> Instr {
+        assert_eq!(lhs.get_type(), rhs.get_type());
+        
+        // Constant folding
+        match (lhs, rhs) {
+            (Instr::ConstI32(_, lval), Instr::ConstI32(_, rval)) => {
+                return Instr::const_bool(lval <= rval);
+            }
+            _ => {}
+        }
+        
+        let lhs_ref = self.intern_instr(lhs);
+        let rhs_ref = self.intern_instr(rhs);
+        Instr::LtEq(Meta::new(Type::Bool), lhs_ref, rhs_ref)
+    }
+
+    pub fn gt_eq(&mut self, lhs: Instr, rhs: Instr) -> Instr {
+        assert_eq!(lhs.get_type(), rhs.get_type());
+        
+        // Constant folding
+        match (lhs, rhs) {
+            (Instr::ConstI32(_, lval), Instr::ConstI32(_, rval)) => {
+                return Instr::const_bool(lval >= rval);
+            }
+            _ => {}
+        }
+        
+        let lhs_ref = self.intern_instr(lhs);
+        let rhs_ref = self.intern_instr(rhs);
+        Instr::GtEq(Meta::new(Type::Bool), lhs_ref, rhs_ref)
+    }
+
+    pub fn and(&mut self, lhs: Instr, rhs: Instr) -> Instr {
+        assert_eq!(lhs.get_type(), Type::Bool);
+        assert_eq!(rhs.get_type(), Type::Bool);
+        
+        // Constant folding and short-circuit optimizations
+        match (lhs, rhs) {
+            (Instr::ConstBool(_, lval), Instr::ConstBool(_, rval)) => {
+                return Instr::const_bool(lval && rval);
+            }
+            (Instr::ConstBool(_, false), _) | (_, Instr::ConstBool(_, false)) => {
+                return Instr::const_bool(false); // x && false = false
+            }
+            (Instr::ConstBool(_, true), _) => {
+                return rhs; // true && x = x
+            }
+            (_, Instr::ConstBool(_, true)) => {
+                return lhs; // x && true = x
+            }
+            _ => {}
+        }
+        
+        let lhs_ref = self.intern_instr(lhs);
+        let rhs_ref = self.intern_instr(rhs);
+        Instr::And(Meta::new(Type::Bool), lhs_ref, rhs_ref)
+    }
+
+    pub fn or(&mut self, lhs: Instr, rhs: Instr) -> Instr {
+        assert_eq!(lhs.get_type(), Type::Bool);
+        assert_eq!(rhs.get_type(), Type::Bool);
+        
+        // Constant folding and short-circuit optimizations
+        match (lhs, rhs) {
+            (Instr::ConstBool(_, lval), Instr::ConstBool(_, rval)) => {
+                return Instr::const_bool(lval || rval);
+            }
+            (Instr::ConstBool(_, true), _) | (_, Instr::ConstBool(_, true)) => {
+                return Instr::const_bool(true); // x || true = true
+            }
+            (Instr::ConstBool(_, false), _) => {
+                return rhs; // false || x = x
+            }
+            (_, Instr::ConstBool(_, false)) => {
+                return lhs; // x || false = x
+            }
+            _ => {}
+        }
+        
+        let lhs_ref = self.intern_instr(lhs);
+        let rhs_ref = self.intern_instr(rhs);
+        Instr::Or(Meta::new(Type::Bool), lhs_ref, rhs_ref)
+    }
+
+    pub fn neg(&mut self, operand: Instr) -> Instr {
+        assert_eq!(operand.get_type(), Type::I32);
+        
+        // Constant folding
+        match operand {
+            Instr::ConstI32(_, val) => {
+                return Instr::const_i32(val.wrapping_neg());
+            }
+            _ => {}
+        }
+        
+        let operand_ref = self.intern_instr(operand);
+        Instr::Neg(Meta::new(Type::I32), operand_ref)
+    }
+
+    pub fn not(&mut self, operand: Instr) -> Instr {
+        assert_eq!(operand.get_type(), Type::Bool);
+        
+        // Constant folding
+        match operand {
+            Instr::ConstBool(_, val) => {
+                return Instr::const_bool(!val);
+            }
+            _ => {}
+        }
+        
+        let operand_ref = self.intern_instr(operand);
+        Instr::Not(Meta::new(Type::Bool), operand_ref)
+    }
+
     pub fn seal_block(&mut self, block: BlockRef) {
         let incomplete_phis: SmallVec<[PhiRef; 8]> = {
             let b = self.blocks.get_mut(block);
@@ -750,5 +962,127 @@ mod tests {
         
         // We've successfully created and accessed phi nodes through the RefMap API
         // The fact that we got here without panicking means the RefMap is working correctly
+    }
+
+    #[test]
+    fn test_all_new_operators() {
+        let mut gen = IrGen::new();
+        
+        // Test arithmetic operators
+        let two = Instr::const_i32(2);
+        let three = Instr::const_i32(3);
+        let zero = Instr::const_i32(0);
+        let one = Instr::const_i32(1);
+        
+        // Test subtraction with optimizations
+        let sub_result = gen.sub(three, two);
+        match sub_result {
+            Instr::ConstI32(_, val) => assert_eq!(val, 1),
+            _ => panic!("Expected constant folding for subtraction"),
+        }
+        
+        let sub_zero = gen.sub(three, zero);
+        match sub_zero {
+            Instr::ConstI32(_, val) => assert_eq!(val, 3),
+            _ => panic!("Expected x - 0 = x optimization"),
+        }
+        
+        // Test multiplication with optimizations
+        let mul_result = gen.mul(two, three);
+        match mul_result {
+            Instr::ConstI32(_, val) => assert_eq!(val, 6),
+            _ => panic!("Expected constant folding for multiplication"),
+        }
+        
+        let mul_zero = gen.mul(three, zero);
+        match mul_zero {
+            Instr::ConstI32(_, val) => assert_eq!(val, 0),
+            _ => panic!("Expected x * 0 = 0 optimization"),
+        }
+        
+        let mul_one = gen.mul(three, one);
+        match mul_one {
+            Instr::ConstI32(_, val) => assert_eq!(val, 3),
+            _ => panic!("Expected x * 1 = x optimization"),
+        }
+        
+        // Test division with optimizations
+        let div_result = gen.div(Instr::const_i32(6), two);
+        match div_result {
+            Instr::ConstI32(_, val) => assert_eq!(val, 3),
+            _ => panic!("Expected constant folding for division"),
+        }
+        
+        let div_one = gen.div(three, one);
+        match div_one {
+            Instr::ConstI32(_, val) => assert_eq!(val, 3),
+            _ => panic!("Expected x / 1 = x optimization"),
+        }
+        
+        // Test comparison operators
+        let lt_result = gen.lt(two, three);
+        match lt_result {
+            Instr::ConstBool(_, val) => assert_eq!(val, true),
+            _ => panic!("Expected constant folding for less than"),
+        }
+        
+        let gt_result = gen.gt(three, two);
+        match gt_result {
+            Instr::ConstBool(_, val) => assert_eq!(val, true),
+            _ => panic!("Expected constant folding for greater than"),
+        }
+        
+        let lt_eq_result = gen.lt_eq(two, two);
+        match lt_eq_result {
+            Instr::ConstBool(_, val) => assert_eq!(val, true),
+            _ => panic!("Expected constant folding for less than or equal"),
+        }
+        
+        let gt_eq_result = gen.gt_eq(three, three);
+        match gt_eq_result {
+            Instr::ConstBool(_, val) => assert_eq!(val, true),
+            _ => panic!("Expected constant folding for greater than or equal"),
+        }
+        
+        // Test logical operators with short-circuit optimizations
+        let true_val = Instr::const_bool(true);
+        let false_val = Instr::const_bool(false);
+        
+        let and_result = gen.and(true_val, false_val);
+        match and_result {
+            Instr::ConstBool(_, val) => assert_eq!(val, false),
+            _ => panic!("Expected constant folding for AND"),
+        }
+        
+        let and_true = gen.and(true_val, true_val);
+        match and_true {
+            Instr::ConstBool(_, val) => assert_eq!(val, true),
+            _ => panic!("Expected true && true = true optimization"),
+        }
+        
+        let or_result = gen.or(false_val, true_val);
+        match or_result {
+            Instr::ConstBool(_, val) => assert_eq!(val, true),
+            _ => panic!("Expected constant folding for OR"),
+        }
+        
+        let or_false = gen.or(false_val, false_val);
+        match or_false {
+            Instr::ConstBool(_, val) => assert_eq!(val, false),
+            _ => panic!("Expected false || false = false optimization"),
+        }
+        
+        // Test unary operators
+        let neg_result = gen.neg(three);
+        match neg_result {
+            Instr::ConstI32(_, val) => assert_eq!(val, -3),
+            _ => panic!("Expected constant folding for negation"),
+        }
+        
+        let not_result = gen.not(true_val);
+        match not_result {
+            Instr::ConstBool(_, val) => assert_eq!(val, false),
+            _ => panic!("Expected constant folding for logical NOT"),
+        }
     }
 }

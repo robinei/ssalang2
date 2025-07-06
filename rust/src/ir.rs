@@ -167,8 +167,19 @@ pub enum Instr {
     ConstI32(Meta, i32),
     Arg(Meta, i32),
     Add(Meta, InstrRef, InstrRef),
+    Sub(Meta, InstrRef, InstrRef),
+    Mul(Meta, InstrRef, InstrRef),
+    Div(Meta, InstrRef, InstrRef),
     Eq(Meta, InstrRef, InstrRef),
     Neq(Meta, InstrRef, InstrRef),
+    Lt(Meta, InstrRef, InstrRef),
+    Gt(Meta, InstrRef, InstrRef),
+    LtEq(Meta, InstrRef, InstrRef),
+    GtEq(Meta, InstrRef, InstrRef),
+    And(Meta, InstrRef, InstrRef),
+    Or(Meta, InstrRef, InstrRef),
+    Neg(Meta, InstrRef),
+    Not(Meta, InstrRef),
 }
 
 impl Instr {
@@ -191,8 +202,19 @@ impl Instr {
                 | Self::ConstI32(..)
                 | Self::Arg(..)
                 | Self::Add(..)
+                | Self::Sub(..)
+                | Self::Mul(..)
+                | Self::Div(..)
                 | Self::Eq(..)
                 | Self::Neq(..)
+                | Self::Lt(..)
+                | Self::Gt(..)
+                | Self::LtEq(..)
+                | Self::GtEq(..)
+                | Self::And(..)
+                | Self::Or(..)
+                | Self::Neg(..)
+                | Self::Not(..)
         )
     }
 
@@ -215,8 +237,19 @@ impl Instr {
             Self::ConstI32(meta, ..) => *meta,
             Self::Arg(meta, ..) => *meta,
             Self::Add(meta, ..) => *meta,
+            Self::Sub(meta, ..) => *meta,
+            Self::Mul(meta, ..) => *meta,
+            Self::Div(meta, ..) => *meta,
             Self::Eq(meta, ..) => *meta,
             Self::Neq(meta, ..) => *meta,
+            Self::Lt(meta, ..) => *meta,
+            Self::Gt(meta, ..) => *meta,
+            Self::LtEq(meta, ..) => *meta,
+            Self::GtEq(meta, ..) => *meta,
+            Self::And(meta, ..) => *meta,
+            Self::Or(meta, ..) => *meta,
+            Self::Neg(meta, ..) => *meta,
+            Self::Not(meta, ..) => *meta,
         }
     }
 

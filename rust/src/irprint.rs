@@ -239,6 +239,79 @@ impl<'a> IrPrinter<'a> {
                 self.buffer.push_str(", ");
                 self.write_colored(Color::Reference, &self.format_instr_ref(*right));
             }
+            Instr::Sub(_, left, right) => {
+                self.write_colored(Color::Instruction, "sub");
+                self.buffer.push_str("        ");
+                self.write_colored(Color::Reference, &self.format_instr_ref(*left));
+                self.buffer.push_str(", ");
+                self.write_colored(Color::Reference, &self.format_instr_ref(*right));
+            }
+            Instr::Mul(_, left, right) => {
+                self.write_colored(Color::Instruction, "mul");
+                self.buffer.push_str("        ");
+                self.write_colored(Color::Reference, &self.format_instr_ref(*left));
+                self.buffer.push_str(", ");
+                self.write_colored(Color::Reference, &self.format_instr_ref(*right));
+            }
+            Instr::Div(_, left, right) => {
+                self.write_colored(Color::Instruction, "div");
+                self.buffer.push_str("        ");
+                self.write_colored(Color::Reference, &self.format_instr_ref(*left));
+                self.buffer.push_str(", ");
+                self.write_colored(Color::Reference, &self.format_instr_ref(*right));
+            }
+            Instr::Lt(_, left, right) => {
+                self.write_colored(Color::Instruction, "lt");
+                self.buffer.push_str("         ");
+                self.write_colored(Color::Reference, &self.format_instr_ref(*left));
+                self.buffer.push_str(", ");
+                self.write_colored(Color::Reference, &self.format_instr_ref(*right));
+            }
+            Instr::Gt(_, left, right) => {
+                self.write_colored(Color::Instruction, "gt");
+                self.buffer.push_str("         ");
+                self.write_colored(Color::Reference, &self.format_instr_ref(*left));
+                self.buffer.push_str(", ");
+                self.write_colored(Color::Reference, &self.format_instr_ref(*right));
+            }
+            Instr::LtEq(_, left, right) => {
+                self.write_colored(Color::Instruction, "lt_eq");
+                self.buffer.push_str("      ");
+                self.write_colored(Color::Reference, &self.format_instr_ref(*left));
+                self.buffer.push_str(", ");
+                self.write_colored(Color::Reference, &self.format_instr_ref(*right));
+            }
+            Instr::GtEq(_, left, right) => {
+                self.write_colored(Color::Instruction, "gt_eq");
+                self.buffer.push_str("      ");
+                self.write_colored(Color::Reference, &self.format_instr_ref(*left));
+                self.buffer.push_str(", ");
+                self.write_colored(Color::Reference, &self.format_instr_ref(*right));
+            }
+            Instr::And(_, left, right) => {
+                self.write_colored(Color::Instruction, "and");
+                self.buffer.push_str("        ");
+                self.write_colored(Color::Reference, &self.format_instr_ref(*left));
+                self.buffer.push_str(", ");
+                self.write_colored(Color::Reference, &self.format_instr_ref(*right));
+            }
+            Instr::Or(_, left, right) => {
+                self.write_colored(Color::Instruction, "or");
+                self.buffer.push_str("         ");
+                self.write_colored(Color::Reference, &self.format_instr_ref(*left));
+                self.buffer.push_str(", ");
+                self.write_colored(Color::Reference, &self.format_instr_ref(*right));
+            }
+            Instr::Neg(_, operand) => {
+                self.write_colored(Color::Instruction, "neg");
+                self.buffer.push_str("        ");
+                self.write_colored(Color::Reference, &self.format_instr_ref(*operand));
+            }
+            Instr::Not(_, operand) => {
+                self.write_colored(Color::Instruction, "not");
+                self.buffer.push_str("        ");
+                self.write_colored(Color::Reference, &self.format_instr_ref(*operand));
+            }
         }
     }
 
