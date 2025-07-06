@@ -240,7 +240,7 @@ impl Parser {
         // Exit function func
         self.exit_func(function_func_id);
 
-        let func_node = Node::Func(function_func_id, body, return_type);
+        let func_node = Node::Fn(function_func_id, body, return_type);
         Ok(self
             .ast
             .add_node(func_node, NodeInfo::new(start_token_index)))

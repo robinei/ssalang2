@@ -241,7 +241,7 @@ pub enum Node {
     ConstI32(i32),          // value
     ConstString(StringRef), // string_ref
 
-    // Operation nodes
+    // Operator nodes
     Unop(UnopType, NodeRef),              // op_type, operand
     Binop(BinopType, NodeRef, NodeRef),   // op_type, left, right
 
@@ -262,7 +262,7 @@ pub enum Node {
     Return(NodeRef),                   // value_node
 
     // Function node
-    Func(FuncIndex, NodeRef, NodeRef), // func_index, body, return_type
+    Fn(FuncIndex, NodeRef, NodeRef), // func_index, body, return_type
 
     // Module node
     Module(FuncIndex, NodesRef), // func_index, nodes

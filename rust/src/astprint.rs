@@ -233,7 +233,7 @@ impl<'a> AstPrinter<'a> {
                 self.print_expression(node_ref);
             }
             Node::DefineFn(local_index, func_node) => {
-                if let Node::Func(func_index, body, return_type) = self.ast.get_node(*func_node) {
+                if let Node::Fn(func_index, body, return_type) = self.ast.get_node(*func_node) {
                     let func = self.ast.get_func(*func_index);
                     
                     if func.is_static {
@@ -392,7 +392,7 @@ impl<'a> AstPrinter<'a> {
                 self.print_expression(*value);
                 self.emit_token(TokenType::Semicolon, ";");
             }
-            Node::Func(func_index, body, return_type) => {
+            Node::Fn(func_index, body, return_type) => {
                 let func = self.ast.get_func(*func_index);
                 if func.is_static {
                     self.emit_token(TokenType::Static, "static ");
