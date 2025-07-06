@@ -155,31 +155,33 @@ impl<'a> IrPrinter<'a> {
     fn print_instruction_body(&mut self, instr: &Instr) {
         match instr {
             Instr::Nop(_) => {
-                self.write_colored(Color::Instruction, "nop");
+                let name = self.get_instr_name(instr);
+                self.write_colored(Color::Instruction, name);
             }
             Instr::Identity(_, operand) => {
-                self.write_colored(Color::Instruction, "identity");
-                self.buffer.push_str("  ");
-                self.write_colored(Color::Reference, &self.format_instr_ref(*operand));
+                let name = self.get_instr_name(instr);
+                self.print_unary_instr(name, *operand);
             }
             Instr::Print(_, operand) => {
-                self.write_colored(Color::Instruction, "print");
-                self.buffer.push_str("      ");
-                self.write_colored(Color::Reference, &self.format_instr_ref(*operand));
+                let name = self.get_instr_name(instr);
+                self.print_unary_instr(name, *operand);
             }
             Instr::Label(_, block_ref) => {
-                self.write_colored(Color::Instruction, "label");
-                self.buffer.push_str("      ");
+                let name = self.get_instr_name(instr);
+                self.write_colored(Color::Instruction, name);
+                self.buffer.push_str(self.calculate_spacing(name));
                 self.write_colored(Color::Reference, &self.format_block_ref(*block_ref));
             }
             Instr::Jump(_, block_ref) => {
-                self.write_colored(Color::Instruction, "jump");
-                self.buffer.push_str("       ");
+                let name = self.get_instr_name(instr);
+                self.write_colored(Color::Instruction, name);
+                self.buffer.push_str(self.calculate_spacing(name));
                 self.write_colored(Color::Reference, &self.format_block_ref(*block_ref));
             }
             Instr::Branch(_, cond, true_block, false_block) => {
-                self.write_colored(Color::Instruction, "branch");
-                self.buffer.push_str("     ");
+                let name = self.get_instr_name(instr);
+                self.write_colored(Color::Instruction, name);
+                self.buffer.push_str(self.calculate_spacing(name));
                 self.write_colored(Color::Reference, &self.format_instr_ref(*cond));
                 self.buffer.push_str(", ");
                 self.write_colored(Color::Reference, &self.format_block_ref(*true_block));
@@ -187,132 +189,123 @@ impl<'a> IrPrinter<'a> {
                 self.write_colored(Color::Reference, &self.format_block_ref(*false_block));
             }
             Instr::Ret(_, value) => {
-                self.write_colored(Color::Instruction, "ret");
-                self.buffer.push_str("        ");
-                self.write_colored(Color::Reference, &self.format_instr_ref(*value));
+                let name = self.get_instr_name(instr);
+                self.print_unary_instr(name, *value);
             }
             Instr::Upsilon(_, phi_ref, value) => {
-                self.write_colored(Color::Instruction, "upsilon");
-                self.buffer.push_str("    ");
+                let name = self.get_instr_name(instr);
+                self.write_colored(Color::Instruction, name);
+                self.buffer.push_str(self.calculate_spacing(name));
                 self.write_colored(Color::Reference, &self.format_phi_ref(*phi_ref));
                 self.buffer.push_str(", ");
                 self.write_colored(Color::Reference, &self.format_instr_ref(*value));
             }
             Instr::Phi(_, phi_ref) => {
-                self.write_colored(Color::Instruction, "phi");
-                self.buffer.push_str("        ");
+                let name = self.get_instr_name(instr);
+                self.write_colored(Color::Instruction, name);
+                self.buffer.push_str(self.calculate_spacing(name));
                 self.write_colored(Color::Reference, &self.format_phi_ref(*phi_ref));
             }
             Instr::ConstBool(_, value) => {
-                self.write_colored(Color::Instruction, "const_bool");
+                let name = self.get_instr_name(instr);
+                self.write_colored(Color::Instruction, name);
                 self.buffer.push_str(" ");
                 self.write_colored(Color::Constant, &value.to_string());
             }
             Instr::ConstI32(_, value) => {
-                self.write_colored(Color::Instruction, "const_i32");
+                let name = self.get_instr_name(instr);
+                self.write_colored(Color::Instruction, name);
                 self.buffer.push_str("  ");
                 self.write_colored(Color::Constant, &value.to_string());
             }
             Instr::Arg(_, index) => {
-                self.write_colored(Color::Instruction, "arg");
-                self.buffer.push_str("        ");
+                let name = self.get_instr_name(instr);
+                self.write_colored(Color::Instruction, name);
+                self.buffer.push_str(self.calculate_spacing(name));
                 self.write_colored(Color::Constant, &index.to_string());
             }
-            Instr::Add(_, left, right) => {
-                self.write_colored(Color::Instruction, "add");
-                self.buffer.push_str("        ");
-                self.write_colored(Color::Reference, &self.format_instr_ref(*left));
-                self.buffer.push_str(", ");
-                self.write_colored(Color::Reference, &self.format_instr_ref(*right));
+            // Binary operators - all follow same pattern
+            Instr::Add(_, left, right) | Instr::Sub(_, left, right) | 
+            Instr::Mul(_, left, right) | Instr::Div(_, left, right) |
+            Instr::Eq(_, left, right) | Instr::Neq(_, left, right) |
+            Instr::Lt(_, left, right) | Instr::Gt(_, left, right) |
+            Instr::LtEq(_, left, right) | Instr::GtEq(_, left, right) |
+            Instr::And(_, left, right) | Instr::Or(_, left, right) => {
+                let name = self.get_instr_name(instr);
+                self.print_binary_instr(name, *left, *right);
             }
-            Instr::Eq(_, left, right) => {
-                self.write_colored(Color::Instruction, "eq");
-                self.buffer.push_str("         ");
-                self.write_colored(Color::Reference, &self.format_instr_ref(*left));
-                self.buffer.push_str(", ");
-                self.write_colored(Color::Reference, &self.format_instr_ref(*right));
-            }
-            Instr::Neq(_, left, right) => {
-                self.write_colored(Color::Instruction, "neq");
-                self.buffer.push_str("        ");
-                self.write_colored(Color::Reference, &self.format_instr_ref(*left));
-                self.buffer.push_str(", ");
-                self.write_colored(Color::Reference, &self.format_instr_ref(*right));
-            }
-            Instr::Sub(_, left, right) => {
-                self.write_colored(Color::Instruction, "sub");
-                self.buffer.push_str("        ");
-                self.write_colored(Color::Reference, &self.format_instr_ref(*left));
-                self.buffer.push_str(", ");
-                self.write_colored(Color::Reference, &self.format_instr_ref(*right));
-            }
-            Instr::Mul(_, left, right) => {
-                self.write_colored(Color::Instruction, "mul");
-                self.buffer.push_str("        ");
-                self.write_colored(Color::Reference, &self.format_instr_ref(*left));
-                self.buffer.push_str(", ");
-                self.write_colored(Color::Reference, &self.format_instr_ref(*right));
-            }
-            Instr::Div(_, left, right) => {
-                self.write_colored(Color::Instruction, "div");
-                self.buffer.push_str("        ");
-                self.write_colored(Color::Reference, &self.format_instr_ref(*left));
-                self.buffer.push_str(", ");
-                self.write_colored(Color::Reference, &self.format_instr_ref(*right));
-            }
-            Instr::Lt(_, left, right) => {
-                self.write_colored(Color::Instruction, "lt");
-                self.buffer.push_str("         ");
-                self.write_colored(Color::Reference, &self.format_instr_ref(*left));
-                self.buffer.push_str(", ");
-                self.write_colored(Color::Reference, &self.format_instr_ref(*right));
-            }
-            Instr::Gt(_, left, right) => {
-                self.write_colored(Color::Instruction, "gt");
-                self.buffer.push_str("         ");
-                self.write_colored(Color::Reference, &self.format_instr_ref(*left));
-                self.buffer.push_str(", ");
-                self.write_colored(Color::Reference, &self.format_instr_ref(*right));
-            }
-            Instr::LtEq(_, left, right) => {
-                self.write_colored(Color::Instruction, "lt_eq");
-                self.buffer.push_str("      ");
-                self.write_colored(Color::Reference, &self.format_instr_ref(*left));
-                self.buffer.push_str(", ");
-                self.write_colored(Color::Reference, &self.format_instr_ref(*right));
-            }
-            Instr::GtEq(_, left, right) => {
-                self.write_colored(Color::Instruction, "gt_eq");
-                self.buffer.push_str("      ");
-                self.write_colored(Color::Reference, &self.format_instr_ref(*left));
-                self.buffer.push_str(", ");
-                self.write_colored(Color::Reference, &self.format_instr_ref(*right));
-            }
-            Instr::And(_, left, right) => {
-                self.write_colored(Color::Instruction, "and");
-                self.buffer.push_str("        ");
-                self.write_colored(Color::Reference, &self.format_instr_ref(*left));
-                self.buffer.push_str(", ");
-                self.write_colored(Color::Reference, &self.format_instr_ref(*right));
-            }
-            Instr::Or(_, left, right) => {
-                self.write_colored(Color::Instruction, "or");
-                self.buffer.push_str("         ");
-                self.write_colored(Color::Reference, &self.format_instr_ref(*left));
-                self.buffer.push_str(", ");
-                self.write_colored(Color::Reference, &self.format_instr_ref(*right));
-            }
-            Instr::Neg(_, operand) => {
-                self.write_colored(Color::Instruction, "neg");
-                self.buffer.push_str("        ");
-                self.write_colored(Color::Reference, &self.format_instr_ref(*operand));
-            }
-            Instr::Not(_, operand) => {
-                self.write_colored(Color::Instruction, "not");
-                self.buffer.push_str("        ");
-                self.write_colored(Color::Reference, &self.format_instr_ref(*operand));
+            // Unary operators - all follow same pattern  
+            Instr::Neg(_, operand) | Instr::Not(_, operand) => {
+                let name = self.get_instr_name(instr);
+                self.print_unary_instr(name, *operand);
             }
         }
+    }
+
+    fn get_instr_name(&self, instr: &Instr) -> &'static str {
+        match instr {
+            Instr::Nop(_) => "nop",
+            Instr::Identity(..) => "identity",
+            Instr::Print(..) => "print",
+            Instr::Label(..) => "label",
+            Instr::Jump(..) => "jump",
+            Instr::Branch(..) => "branch",
+            Instr::Ret(..) => "ret",
+            Instr::Upsilon(..) => "upsilon",
+            Instr::Phi(..) => "phi",
+            Instr::ConstBool(..) => "const_bool",
+            Instr::ConstI32(..) => "const_i32",
+            Instr::Arg(..) => "arg",
+            Instr::Add(..) => "add",
+            Instr::Sub(..) => "sub",
+            Instr::Mul(..) => "mul",
+            Instr::Div(..) => "div",
+            Instr::Eq(..) => "eq",
+            Instr::Neq(..) => "neq",
+            Instr::Lt(..) => "lt",
+            Instr::Gt(..) => "gt",
+            Instr::LtEq(..) => "lt_eq",
+            Instr::GtEq(..) => "gt_eq",
+            Instr::And(..) => "and",
+            Instr::Or(..) => "or",
+            Instr::Neg(..) => "neg",
+            Instr::Not(..) => "not",
+        }
+    }
+
+    fn calculate_spacing(&self, instr_name: &str) -> &'static str {
+        // Match the exact spacing from original code for compatibility
+        match instr_name {
+            // Most operators: 8 spaces (total width ~11-12)
+            "add" | "sub" | "mul" | "div" | "neq" | "and" | "neg" | "not" | "ret" | "arg" | "phi" => "        ",
+            // Short operators get 9 spaces
+            "eq" | "lt" | "gt" | "or" => "         ",
+            // 5-char operators get 6 spaces  
+            "lt_eq" | "gt_eq" => "      ",
+            // 4-char operators get 7 spaces
+            "jump" => "       ",
+            // Special cases that need different spacing
+            "label" | "print" => "      ",
+            "upsilon" => "    ",
+            "branch" => "     ",
+            "identity" => "  ",
+            // Fallback for any missed cases
+            _ => "        ",
+        }
+    }
+
+    fn print_binary_instr(&mut self, name: &str, left: InstrRef, right: InstrRef) {
+        self.write_colored(Color::Instruction, name);
+        self.buffer.push_str(self.calculate_spacing(name));
+        self.write_colored(Color::Reference, &self.format_instr_ref(left));
+        self.buffer.push_str(", ");
+        self.write_colored(Color::Reference, &self.format_instr_ref(right));
+    }
+
+    fn print_unary_instr(&mut self, name: &str, operand: InstrRef) {
+        self.write_colored(Color::Instruction, name);
+        self.buffer.push_str(self.calculate_spacing(name));
+        self.write_colored(Color::Reference, &self.format_instr_ref(operand));
     }
 
     fn print_type_comment(&mut self, meta: Meta) {
