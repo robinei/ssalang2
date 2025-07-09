@@ -260,6 +260,10 @@ impl Instr {
     pub fn is_marked(&self) -> bool {
         self.get_meta().is_marked()
     }
+
+    pub fn is_const(&self) -> bool {
+        matches!(self, Self::ConstBool(..) | Self::ConstI32(..))
+    }
 }
 
 impl Default for Instr {
@@ -434,5 +438,34 @@ mod tests {
 
         // Verify they're the same
         assert_eq!(nop, default_instr);
+    }
+
+    #[test]
+    fn test_instr_is_const() {
+        // Test constant instructions
+        assert!(Instr::const_bool(true).is_const());
+        assert!(Instr::const_bool(false).is_const());
+        assert!(Instr::const_i32(42).is_const());
+        assert!(Instr::const_i32(-1).is_const());
+        assert!(Instr::const_i32(0).is_const());
+
+        // Test non-constant instructions
+        let instr_ref = InstrRef::new(1).unwrap();
+        assert!(!Instr::nop().is_const());
+        assert!(!Instr::Identity(Meta::new(Type::I32), instr_ref).is_const());
+        assert!(!Instr::Add(Meta::new(Type::I32), instr_ref, instr_ref).is_const());
+        assert!(!Instr::Arg(Meta::new(Type::I32), 0).is_const());
+        assert!(!Instr::Print(Meta::new(Type::Void), instr_ref).is_const());
+        
+        // Test control flow instructions
+        let block_ref = BlockRef::new(1).unwrap();
+        assert!(!Instr::Jump(Meta::new(Type::Void), block_ref).is_const());
+        assert!(!Instr::Branch(Meta::new(Type::Void), instr_ref, block_ref, block_ref).is_const());
+        assert!(!Instr::Ret(Meta::new(Type::Void), instr_ref).is_const());
+        
+        // Test SSA instructions
+        let phi_ref = PhiRef::new(1).unwrap();
+        assert!(!Instr::Phi(Meta::new(Type::I32), phi_ref).is_const());
+        assert!(!Instr::Upsilon(Meta::new(Type::Void), phi_ref, instr_ref).is_const());
     }
 }

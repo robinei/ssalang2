@@ -277,10 +277,8 @@ impl<'a> AstPrinter<'a> {
                 let var_name = self.ast.get_local_name(*local_index);
                 self.emit_token(TokenType::Identifier, var_name);
             }
-            Node::Block(block_index, nodes_ref) => {
-                let block = self.ast.get_block(*block_index);
-
-                if block.is_static {
+            Node::Block(is_static, label, nodes_ref) => {
+                if *is_static {
                     self.emit_token(TokenType::Static, "static ");
                 }
 
@@ -289,19 +287,19 @@ impl<'a> AstPrinter<'a> {
                 if nodes.is_empty() || nodes.len() == 1 && self.is_unit_value(nodes[0]) {
                     self.emit_token(TokenType::LeftBrace, "{ ");
                     // Print optional label for empty blocks
-                    if let Some(name_ref) = block.name {
-                        let name = self.ast.get_symbol(name_ref);
-                        self.emit_token(TokenType::Identifier, name);
+                    if let Some(label_ref) = label {
+                        let label_string = self.ast.get_symbol(*label_ref);
+                        self.emit_token(TokenType::Identifier, label_string);
                         self.emit_token(TokenType::Colon, ": ");
                     }
                     self.emit_token(TokenType::RightBrace, "}");
                 } else {
                     self.emit_token(TokenType::LeftBrace, "{");
                     // Print optional label at start of block
-                    if let Some(name_ref) = block.name {
+                    if let Some(label_ref) = label {
                         self.buffer.push(' ');
-                        let name = self.ast.get_symbol(name_ref);
-                        self.emit_token(TokenType::Identifier, name);
+                        let label_string = self.ast.get_symbol(*label_ref);
+                        self.emit_token(TokenType::Identifier, label_string);
                         self.emit_token(TokenType::Colon, ":");
                     }
                     self.write_newline();
@@ -356,14 +354,13 @@ impl<'a> AstPrinter<'a> {
                 // Handle body (always a Block)
                 self.print_node(*body);
             }
-            Node::Break(block_index, value) => {
+            Node::Break(label, value) => {
                 self.emit_token(TokenType::Break, "break");
                 
                 // Check if the block has a label
-                let block = self.ast.get_block(*block_index);
-                if let Some(label_ref) = block.name {
-                    let label = self.ast.get_symbol(label_ref);
-                    self.emit_token(TokenType::Identifier, &format!(" {}", label));
+                if let Some(label_ref) = label {
+                    let label_string = self.ast.get_symbol(*label_ref);
+                    self.emit_token(TokenType::Identifier, &format!(" {}", label_string));
                 }
                 
                 if !self.is_unit_value(*value) {
@@ -372,20 +369,15 @@ impl<'a> AstPrinter<'a> {
                 }
                 self.emit_token(TokenType::Semicolon, ";");
             }
-            Node::Continue(block_index, value) => {
+            Node::Continue(label) => {
                 self.emit_token(TokenType::Continue, "continue");
                 
                 // Check if the block has a label
-                let block = self.ast.get_block(*block_index);
-                if let Some(label_ref) = block.name {
-                    let label = self.ast.get_symbol(label_ref);
-                    self.emit_token(TokenType::Identifier, &format!(" {}", label));
+                if let Some(label_ref) = label {
+                    let label_string = self.ast.get_symbol(*label_ref);
+                    self.emit_token(TokenType::Identifier, &format!(" {}", label_string));
                 }
                 
-                if !self.is_unit_value(*value) {
-                    self.buffer.push(' ');
-                    self.print_expression(*value);
-                }
                 self.emit_token(TokenType::Semicolon, ";");
             }
             Node::Return(value) => {
@@ -500,7 +492,7 @@ impl<'a> AstPrinter<'a> {
     }
 
     fn is_block_node(&self, node_ref: NodeRef) -> bool {
-        matches!(self.ast.get_node(node_ref), Node::Block(_, _))
+        matches!(self.ast.get_node(node_ref), Node::Block(_, _, _))
     }
 
     fn is_if_node(&self, node_ref: NodeRef) -> bool {
@@ -509,7 +501,7 @@ impl<'a> AstPrinter<'a> {
 
     fn is_empty_or_unit_only_block(&self, node_ref: NodeRef) -> bool {
         // Check if this is a Block with no statements or only unit value
-        if let Node::Block(_, nodes_ref) = self.ast.get_node(node_ref) {
+        if let Node::Block(_, _, nodes_ref) = self.ast.get_node(node_ref) {
             if nodes_ref.count == 0 {
                 return true;
             }
@@ -543,7 +535,7 @@ impl<'a> AstPrinter<'a> {
             }
             let param_name = self.ast.get_symbol(local.name);
             self.emit_token(TokenType::Identifier, param_name);
-            if let Some(ty) = local.ty {
+            if let Some(ty) = local.type_node {
                 self.emit_token(TokenType::Colon, ": ");
                 self.print_node(ty);
             }

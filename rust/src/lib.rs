@@ -1,9 +1,11 @@
 pub mod ast;
 pub mod astprint;
 pub mod code;
+pub mod compile;
 pub mod ir;
 pub mod irgen;
 pub mod irprint;
 pub mod lexer;
 pub mod parse;
 pub mod refmap;
+pub mod types;

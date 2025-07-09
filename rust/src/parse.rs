@@ -6,8 +6,8 @@ use std::collections::HashMap;
 // Cleanup operations for func management
 #[derive(Debug, Clone)]
 enum CleanupAction {
-    Delete(SymbolRef, BlockIndex), // Remove binding when exiting block
-    Replace(SymbolRef, LocalRef, BlockIndex), // Restore shadowed binding when exiting block
+    Delete(SymbolRef), // Remove binding when exiting block
+    Replace(SymbolRef, LocalRef), // Restore shadowed binding when exiting block
 }
 
 pub struct Parser {
@@ -22,7 +22,6 @@ pub struct Parser {
     binding_map: HashMap<SymbolRef, LocalRef>, // Current symbol -> local ref mappings
     cleanup_stack: Vec<CleanupAction>,            // Stack of cleanup operations
     func_stack: Vec<FuncIndex>,                // Stack of currently active func IDs
-    block_stack: Vec<BlockIndex>,                // Stack of currently active block IDs
     
     // Function local collection
     function_locals: Vec<Local>,                 // Stack of locals for current func being parsed
@@ -59,7 +58,6 @@ impl Parser {
             binding_map: HashMap::new(),
             cleanup_stack: Vec::new(),
             func_stack: Vec::new(),
-            block_stack: Vec::new(),
             function_locals: Vec::new(),
             current_func_index: None,
             func_locals_start: Vec::new(),
@@ -150,9 +148,9 @@ impl Parser {
         self.exit_func(module_func_id);
 
         let nodes_ref = self.ast.add_node_refs(&nodes);
-        let module_node = Node::Module(module_func_id, nodes_ref);
-        let info = NodeInfo::new(start_token_index);
-        Ok(self.ast.add_node(module_node, info))
+        let node = Node::Module(module_func_id, nodes_ref);
+        let node_ref = self.ast.add_node(node, NodeInfo::new(start_token_index));
+        Ok(node_ref)
     }
 
     fn parse_top_level_definition(&mut self) -> ParseResult<NodeRef> {
@@ -174,36 +172,35 @@ impl Parser {
 
         self.expect(TokenType::Fn)?;
 
-        if self.current_token.token_type == TokenType::Identifier {
-            // Named function: fn foo() {} -> const foo = fn() {}
-            let name = self.get_token_text(&self.current_token).to_owned();
-            let name_ref = self.ast.intern_symbol(name);
-            self.advance();
-
-            // Parse the function value
-            let func_value = self.parse_function_value(is_static, is_inline)?;
-
-            // Create a local binding for the function name
-            let local = Local {
-                name: name_ref,
-                is_param: false,
-                is_static: true, // Functions variables are static
-                is_const: true,  // Functions are const
-                ty: None, // TODO: proper function type inference
-            };
-
-            self.create_function_definition(local, func_value, start_token_index)
-        } else {
+        if self.current_token.token_type != TokenType::Identifier {
             // Anonymous function: fn() {}
-            self.parse_function_value(is_static, is_inline)
+            return self.parse_function_value(is_static, is_inline)
         }
+
+        // Named function: fn foo() {} -> const foo = fn() {}
+        let name = self.get_token_text(&self.current_token).to_owned();
+        let name_ref = self.ast.intern_symbol(name);
+        self.advance();
+        let func_value = self.parse_function_value(is_static, is_inline)?;
+
+        let local = Local {
+            name: name_ref,
+            is_param: false,
+            is_static: true, // Functions variables are static
+            is_const: true,  // Functions variables are const
+            type_node: None, // Functions are self-describing
+        };
+        let local_ref = self.add_and_bind_local(local);
+
+        // Create DefineFn node with final LocalRef
+        let node = Node::DefineFn(local_ref, func_value);
+        let node_ref = self.ast.add_node(node, NodeInfo::new(start_token_index));
+        Ok(node_ref)
     }
 
     fn parse_function_value(&mut self, is_static: bool, is_inline: bool) -> ParseResult<NodeRef> {
         let start_token_index = self.token_index;
-
-        let function_func_id = self.enter_func(is_static, is_inline);
-
+        let func_id = self.enter_func(is_static, is_inline);
         self.expect(TokenType::LeftParen)?;
 
         // Parse parameters directly into function_locals
@@ -228,22 +225,15 @@ impl Parser {
             self.parse_type()?
         } else {
             // Default to unit
-            self.ast.add_node(
-                Node::TypeAtom(TypeAtom::Unit),
-                NodeInfo::new(self.token_index),
-            )
+            self.ast.add_node(Node::TypeAtom(TypeAtom::Unit), NodeInfo::new(self.token_index))
         };
 
-        // Parse function body
         let body = self.parse_block()?;
+        self.exit_func(func_id);
 
-        // Exit function func
-        self.exit_func(function_func_id);
-
-        let func_node = Node::Fn(function_func_id, body, return_type);
-        Ok(self
-            .ast
-            .add_node(func_node, NodeInfo::new(start_token_index)))
+        let func_node = Node::Fn(func_id, body, return_type);
+        let node_ref = self.ast.add_node(func_node, NodeInfo::new(start_token_index));
+        Ok(node_ref)
     }
 
     // Parse a function parameter
@@ -277,7 +267,7 @@ impl Parser {
             is_param: true,
             is_static,
             is_const: false,
-            ty: Some(param_type),
+            type_node: Some(param_type),
         })
     }
 
@@ -316,9 +306,7 @@ impl Parser {
     // Parse a block statement
     fn parse_block(&mut self) -> ParseResult<NodeRef> {
         let start_token_index = self.token_index;
-
         let is_static = self.parse_static_flag();
-
         self.expect(TokenType::LeftBrace)?;
 
         // Check for optional block label: `{ label: statements... }`
@@ -333,17 +321,10 @@ impl Parser {
             None
         };
 
-        // Create and register the block
-        let block = Block {
-            is_static,
-            name: block_name
-        };
-        let block_id = self.ast.add_block(block);
-        self.block_stack.push(block_id);
-
         // Parse all statements in the block
         let mut statements: SmallVec<[NodeRef; 64]> = SmallVec::new();
         let mut last_had_semicolon = false;
+        let prev_cleanup_len = self.cleanup_stack.len();
 
         while self.current_token.token_type != TokenType::RightBrace {
             let stmt = self.parse_statement()?;
@@ -363,32 +344,20 @@ impl Parser {
 
         self.expect(TokenType::RightBrace)?;
 
-        // Verify we're exiting the most recent block
-        if let Some(&top_block) = self.block_stack.last() {
-            assert_eq!(top_block, block_id, "Exiting block out of order");
-            self.block_stack.pop();
-        }
-
         // Pop and apply cleanup operations until we've handled all for this block
-        while let Some(cleanup) = self.cleanup_stack.pop() {
-            match cleanup {
-                CleanupAction::Delete(symbol, block) => {
-                    if block != block_id {
-                        break; // We've finished this block's cleanup operations
-                    }
+        while self.cleanup_stack.len() > prev_cleanup_len {
+            match self.cleanup_stack.pop().unwrap() {
+                CleanupAction::Delete(symbol) => {
                     self.binding_map.remove(&symbol);
                 }
-                CleanupAction::Replace(symbol, old_local_ref, block) => {
-                    if block != block_id {
-                        break; // We've finished this block's cleanup operations
-                    }
+                CleanupAction::Replace(symbol, old_local_ref) => {
                     self.binding_map.insert(symbol, old_local_ref);
                 }
             }
         }
 
         let statements_ref = self.ast.add_node_refs(&statements);
-        let block_node = Node::Block(block_id, statements_ref);
+        let block_node = Node::Block(is_static, block_name, statements_ref);
         Ok(self
             .ast
             .add_node(block_node, NodeInfo::new(start_token_index)))
@@ -490,7 +459,7 @@ impl Parser {
             is_param: false,
             is_static,
             is_const,
-            ty: None,
+            type_node: None,
         };
 
         self.create_local_binding(local, expr, start_token_index)
@@ -560,7 +529,7 @@ impl Parser {
                 .add_node(Node::ConstUnit, NodeInfo::new(self.token_index));
             let statements_ref = self.ast.add_node_refs(&[unit_node]);
             self.ast.add_node(
-                Node::Block(0, statements_ref),
+                Node::Block(false, None, statements_ref),
                 NodeInfo::new(self.token_index),
             )
         };
@@ -617,15 +586,14 @@ impl Parser {
         self.advance();
 
         // Check for optional label - if next token is identifier, assume it's a label
-        let target_block = if self.current_token.token_type == TokenType::Identifier {
+        let target_label = if self.current_token.token_type == TokenType::Identifier {
             // This is a label
             let label = self.get_token_text(&self.current_token).to_owned();
             let label_ref = self.ast.intern_symbol(label);
             self.advance();
-            self.find_labeled_block(label_ref)?
+            Some(label_ref)
         } else {
-            // Default to current block
-            *self.block_stack.last().unwrap_or(&0)
+            None
         };
 
         let value = if self.current_token.token_type == TokenType::Semicolon {
@@ -638,9 +606,9 @@ impl Parser {
         self.expect(TokenType::Semicolon)?;
 
         let node = if is_break {
-            Node::Break(target_block, value)
+            Node::Break(target_label, value)
         } else {
-            Node::Continue(target_block, value)
+            Node::Continue(target_label)
         };
         
         Ok(self.ast.add_node(node, NodeInfo::new(start_token_index)))
@@ -785,6 +753,31 @@ impl Parser {
                 }
             }
 
+            // Type atoms as expressions (for const t = i32, etc.)
+            TokenType::Bool => {
+                self.advance();
+                let type_node = Node::TypeAtom(TypeAtom::Bool);
+                Ok(self
+                    .ast
+                    .add_node(type_node, NodeInfo::new(start_token_index)))
+            }
+
+            TokenType::I32 => {
+                self.advance();
+                let type_node = Node::TypeAtom(TypeAtom::I32);
+                Ok(self
+                    .ast
+                    .add_node(type_node, NodeInfo::new(start_token_index)))
+            }
+
+            TokenType::Unit => {
+                self.advance();
+                let type_node = Node::TypeAtom(TypeAtom::Unit);
+                Ok(self
+                    .ast
+                    .add_node(type_node, NodeInfo::new(start_token_index)))
+            }
+
             _ => Err(ParseError::new(
                 format!("Unexpected token: {:?}", token.token_type),
                 token.start,
@@ -859,23 +852,6 @@ impl Parser {
 
     // Func management methods
 
-    /// Find a labeled block by walking up the block stack
-    fn find_labeled_block(&self, label: SymbolRef) -> ParseResult<BlockIndex> {
-        // Walk up block stack to find matching label
-        for &block_index in self.block_stack.iter().rev() {
-            let block = self.ast.get_block(block_index);
-            if let Some(block_name) = block.name {
-                if block_name == label {
-                    return Ok(block_index);
-                }
-            }
-        }
-        Err(ParseError::new(
-            format!("Undefined block label: {}", self.ast.get_symbol(label)),
-            self.current_token.start,
-        ))
-    }
-
     /// Enter a new function func and return its unique ID
     fn enter_func(&mut self, is_static: bool, is_inline: bool) -> FuncIndex {
         // Create func in AST immediately with empty locals
@@ -940,18 +916,13 @@ impl Parser {
         let current_func = self.current_func_index.expect("Should be in a func when adding local");
         let local_ref = LocalRef::new(current_func, index_in_func);
 
-        // Handle shadowing for cleanup - use current block if in one, otherwise no cleanup needed
-        // (module/function level variables don't get cleaned up until func ends)
-        if let Some(&current_block) = self.block_stack.last() {
-            if let Some(old_local_ref) = self.binding_map.get(&name_ref) {
-                // Symbol is being shadowed - save the old binding for restoration
-                self.cleanup_stack
-                    .push(CleanupAction::Replace(name_ref, *old_local_ref, current_block));
-            } else {
-                // New binding - mark for deletion when block exits
-                self.cleanup_stack
-                    .push(CleanupAction::Delete(name_ref, current_block));
-            }
+        // Handle shadowing for cleanup
+        if let Some(old_local_ref) = self.binding_map.get(&name_ref) {
+            // Symbol is being shadowed - save the old binding for restoration
+            self.cleanup_stack.push(CleanupAction::Replace(name_ref, *old_local_ref));
+        } else {
+            // New binding - mark for deletion when block exits
+            self.cleanup_stack.push(CleanupAction::Delete(name_ref));
         }
         // If not in a block, variables persist until func ends (handled by exit_func)
 
@@ -969,18 +940,6 @@ impl Parser {
         // Create Define node with final LocalRef
         let define_node = Node::Define(local_ref, expr);
         let node_ref = self.ast.add_node(define_node, NodeInfo::new(start_token_index));
-        
-        Ok(node_ref)
-    }
-
-    /// Create a function definition and return a DefineFn node
-    /// Helper method for fn name() {} syntax
-    fn create_function_definition(&mut self, local: Local, func_node: NodeRef, start_token_index: usize) -> ParseResult<NodeRef> {
-        let local_ref = self.add_and_bind_local(local);
-
-        // Create DefineFn node with final LocalRef
-        let define_fn_node = Node::DefineFn(local_ref, func_node);
-        let node_ref = self.ast.add_node(define_fn_node, NodeInfo::new(start_token_index));
         
         Ok(node_ref)
     }
@@ -1341,6 +1300,15 @@ mod tests {
     }
 
     #[test]
+    fn test_type_atoms_as_expressions() {
+        // Test type atoms used as expression values
+        roundtrip("fn main() { const t = i32; }");
+        roundtrip("fn main() { const t = bool; }");
+        roundtrip("fn main() { const t = unit; }");
+        roundtrip("fn main() { let x = i32; let y = bool; }");
+    }
+
+    #[test]
     fn test_unit_syntax() {
         // Test implicit unit type (no arrow)
         roundtrip("fn main() { let x = 1; }");
@@ -1434,7 +1402,7 @@ mod tests {
         
         // Test break/continue with values
         roundtrip("fn main() { { loop: break loop 42; } }");
-        roundtrip("fn main() { while true { break 42; continue false; } }");
+        roundtrip("fn main() { while true { break 42; continue; } }");
     }
 
     #[test]
@@ -1503,20 +1471,10 @@ mod tests {
     fn test_break_continue_edge_cases() {
         // Test break/continue with complex expressions (parentheses dropped when not needed)
         roundtrip("fn main() { { loop: break loop 1 + 2 * 3; } }");
-        roundtrip("fn main() { while true { continue 1 == 2; } }");
+        roundtrip("fn main() { while true { continue; } }");
         
         // Test nested blocks with different labels
         roundtrip("fn main() { { a: { b: { c: break a; } } } }");
-    }
-
-    #[test]
-    fn test_label_error_handling() {
-        // Test undefined label error
-        let result = Parser::parse("fn main() { break undefined_label; }");
-        assert!(result.is_err());
-        
-        let result = Parser::parse("fn main() { continue nonexistent; }");
-        assert!(result.is_err());
     }
 
     #[test]

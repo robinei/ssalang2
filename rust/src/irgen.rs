@@ -126,6 +126,14 @@ impl IrGen {
         self.phis.push(Phi::new())
     }
 
+    pub fn get_current_block(&self) -> Option<BlockRef> {
+        self.curr_block
+    }
+
+    pub fn is_block_terminated(&self, block: BlockRef) -> bool {
+        self.blocks.get(block).last.is_some()
+    }
+
     fn create_phi_var(&mut self, var: VarRef) -> PhiRef {
         let mut phi = Phi::new();
         phi.var = Some(var);
@@ -173,7 +181,7 @@ impl IrGen {
         instr_ref
     }
 
-    fn to_instr(&self, instr_ref: InstrRef) -> Instr {
+    pub fn to_instr(&self, instr_ref: InstrRef) -> Instr {
         let instr = self.code[instr_ref];
         match instr {
             Instr::ConstBool(..) | Instr::ConstI32(..) | Instr::Identity(..) => instr,
@@ -181,7 +189,7 @@ impl IrGen {
         }
     }
 
-    fn intern_instr(&mut self, instr: Instr) -> InstrRef {
+    pub fn intern_instr(&mut self, instr: Instr) -> InstrRef {
         match instr {
             Instr::Identity(_, instr_ref) => instr_ref,
             _ => {

@@ -1,6 +1,5 @@
 use crate::lexer::TokenType;
 
-pub type BlockIndex = u16;
 pub type FuncIndex = u16;
 
 // Bundle func and local index together
@@ -237,14 +236,14 @@ pub enum Node {
     LocalRead(LocalRef),           // local_ref
 
     // Control flow nodes
-    Block(BlockIndex, NodesRef), // block_index, nodes
-    If(bool, NodeRef, NodeRef, NodeRef),    // is_inline, cond, then, els
-    While(bool, NodeRef, NodeRef),          // is_inline, cond, body
+    Block(bool, Option<SymbolRef>, NodesRef),   // is_static, label, nodes
+    If(bool, NodeRef, NodeRef, NodeRef),        // is_inline, cond, then, els
+    While(bool, NodeRef, NodeRef),              // is_inline, cond, body
 
     // Jump nodes
-    Break(BlockIndex, NodeRef), // block_index, value
-    Continue(BlockIndex, NodeRef), // block_index, value
-    Return(NodeRef),                   // value_node
+    Break(Option<SymbolRef>, NodeRef),  // label, value
+    Continue(Option<SymbolRef>),        // label
+    Return(NodeRef),                    // value_node
 
     // Function node
     Fn(FuncIndex, NodeRef, NodeRef), // func_index, body, return_type
@@ -288,7 +287,7 @@ pub struct Local {
     pub is_param: bool,
     pub is_static: bool,
     pub is_const: bool,
-    pub ty: Option<NodeRef>,
+    pub type_node: Option<NodeRef>,
 }
 
 // AST that owns all associated data including the tree structure itself
@@ -301,7 +300,6 @@ pub struct Ast {
     symbols: Vec<String>,     // Symbol storage for identifiers (interned)
     symbol_map: std::collections::HashMap<String, SymbolRef>, // For symbol interning
     funcs: Vec<Func>,       // All function funcs
-    blocks: Vec<Block>,       // All blocks
     root: Option<NodeRef>,    // Root node of the tree
 }
 
@@ -316,7 +314,6 @@ impl Ast {
             symbols: Vec::new(),
             symbol_map: std::collections::HashMap::new(),
             funcs: Vec::new(),
-            blocks: Vec::new(),
             root: None,
         }
     }
@@ -407,21 +404,6 @@ impl Ast {
 
     pub fn get_func_mut(&mut self, func_index: FuncIndex) -> &mut Func {
         &mut self.funcs[func_index as usize]
-    }
-
-    // Block management methods
-    pub fn add_block(&mut self, block: Block) -> BlockIndex {
-        let block_index = self.blocks.len() as BlockIndex;
-        self.blocks.push(block);
-        block_index
-    }
-
-    pub fn get_block(&self, block_index: BlockIndex) -> &Block {
-        &self.blocks[block_index as usize]
-    }
-
-    pub fn get_block_mut(&mut self, block_index: BlockIndex) -> &mut Block {
-        &mut self.blocks[block_index as usize]
     }
 
     // Node reference storage methods
